@@ -154,6 +154,35 @@ If the progress bar is behaving unexpectedly (e.g., jumping values), you can ena
 
 Remove `--debug` when done.
 
+## Doctor mode
+
+Run a comprehensive self-diagnostic to verify everything is working correctly:
+
+```bash
+node ~/ccstatusline-custom/index.js --doctor
+```
+
+This checks 14 aspects of the installation:
+
+| Check | What it verifies |
+|-------|-----------------|
+| Node.js version | ≥ 14 required |
+| index.js readable | File integrity |
+| Cache directory | `~/.cache/ccstatusline-custom/` is readable and writable |
+| Git available | `git` is in PATH |
+| Git branch detection | Can detect branch name from current directory |
+| statusLine config | `~/.claude/settings.json` points to this file |
+| PreToolUse Skill hook | Hook configured with correct command |
+| UserPromptSubmit hook | Hook configured with correct command |
+| Skill tracking | Write + read round-trip to JSONL |
+| Session smoothing | Max retention + compaction detection |
+| Render test | Full two-line render with mock data (displayed) |
+| ANSI 256-color | Terminal support detection |
+| CJK visibleLen | Chinese/Japanese/Korean character width calculation |
+| Cache data | Existing session and skill file count |
+
+Exit code is `0` when all checks pass, `1` if any check fails — useful for scripting.
+
 ## Files
 
 ```
