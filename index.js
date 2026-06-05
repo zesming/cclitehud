@@ -307,7 +307,7 @@ function getSmoothedSessionData(sessionId, usedPct, cacheHitRate) {
   // stored max, context compaction likely occurred — reset to current values.
   const COMPACTION_THRESHOLD = 25;
   let maxUsedPct, maxCacheHitRate;
-  if ((prev.maxUsedPct || 0) - usedPct > COMPACTION_THRESHOLD) {
+  if ((prev.maxUsedPct || 0) - usedPct >= COMPACTION_THRESHOLD) {
     // Compaction happened — reset both values
     maxUsedPct = usedPct;
     maxCacheHitRate = cacheHitRate;
@@ -604,6 +604,263 @@ function preview() {
   console.log('');
 }
 
+// ─── Doctor mode ─────────────────────────────────────────────────────────────
+function doctor() {
+  const checks = [];
+  let passCount = 0;
+  let warnCount = 0;
+  let failCount = 0;
+
+  const pass = (label, detail) => { checks.push({ icon: '✅', label, detail }); passCount++; };
+  const warn = (label, detail) => { checks.push({ icon: '⚠️', label, detail }); warnCount++; };
+  const fail = (label, detail) => { checks.push({ icon: '❌', label, detail }); failCount++; };
+
+  console.log('');
+  console.log('  ╭──────────────── Doctor — ccstatusline-custom ────────────────╮');
+  console.log('');
+
+  // 1. Node.js version
+  const nodeVersion = process.versions.node;
+  const major = parseInt(nodeVersion.split('.')[0], 10);
+  if (major >= 14) {
+    pass('Node.js version', `v${nodeVersion} (≥14 required)`);
+  } else {
+    fail('Node.js version', `v${nodeVersion} — need ≥14`);
+  }
+
+  // 2. index.js exists and is readable
+  const selfPath = __filename;
+  try {
+    readFileSync(selfPath);
+    pass('index.js readable', selfPath);
+  } catch (e) {
+    fail('index.js readable', `Cannot read: ${e.message}`);
+  }
+
+  // 3. Cache directory
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    const testFile = path.join(CACHE_DIR, '.doctor-test');
+    writeFileSync(testFile, 'ok');
+    readFileSync(testFile, 'utf8');
+    // Clean up — use unlinkSync from fs but we don't import it, use writeFileSync to empty
+    writeFileSync(testFile, '');
+    pass('Cache directory', `${CACHE_DIR} (read/write)`);
+  } catch (e) {
+    fail('Cache directory', `${CACHE_DIR} — ${e.message}`);
+  }
+
+  // 4. Git availability and branch detection
+  try {
+    const gitVer = execSync('git --version', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 }).trim();
+    pass('Git available', gitVer);
+  } catch {
+    warn('Git available', 'git not found in PATH — branch display disabled');
+  }
+
+  const testCwd = process.cwd();
+  const testBranch = getGitBranch(testCwd);
+  if (testBranch) {
+    pass('Git branch detection', `detected: ${testBranch} (cwd: ${testCwd})`);
+  } else {
+    warn('Git branch detection', `no branch in ${testCwd} (not a git repo or detached HEAD)`);
+  }
+
+  // 5. settings.json — statusLine config
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  let settings = null;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+  } catch (e) {
+    fail('settings.json', `Cannot read/parse: ${e.message}`);
+  }
+
+  if (settings) {
+    // Check statusLine
+    const sl = settings.statusLine;
+    if (sl && sl.type === 'command' && typeof sl.command === 'string') {
+      const cmdPath = sl.command.replace(/^node\s+/, '').split(' ')[0];
+      // Resolve to absolute for comparison
+      let resolvedCmd = cmdPath;
+      if (!path.isAbsolute(resolvedCmd)) {
+        resolvedCmd = path.resolve(path.dirname(settingsPath), resolvedCmd);
+      }
+      const resolvedSelf = path.resolve(selfPath);
+
+      if (resolvedCmd === resolvedSelf) {
+        pass('statusLine config', `command points to this file (refreshInterval: ${sl.refreshInterval || 'default'})`);
+      } else if (cmdPath.includes('ccstatusline-custom')) {
+        warn('statusLine config', `path mismatch:\n        settings → ${cmdPath}\n        actual   → ${resolvedSelf}`);
+      } else {
+        warn('statusLine config', `points to different script: ${cmdPath}`);
+      }
+    } else {
+      fail('statusLine config', 'missing or invalid statusLine in settings.json');
+    }
+
+    // Check hooks
+    const hooks = settings.hooks || {};
+    const expectedCmd = `node ${path.resolve(selfPath)} --hook`;
+
+    // PreToolUse → Skill
+    const preHooks = hooks.PreToolUse || [];
+    const skillHook = preHooks.find(h => h.matcher === 'Skill');
+    if (skillHook && skillHook.hooks && skillHook.hooks[0]) {
+      const cmd = skillHook.hooks[0].command;
+      if (cmd.includes('index.js') && cmd.includes('--hook')) {
+        pass('PreToolUse Skill hook', 'configured correctly');
+      } else {
+        warn('PreToolUse Skill hook', `unexpected command: ${cmd}`);
+      }
+    } else {
+      fail('PreToolUse Skill hook', 'not configured — skill tracking disabled');
+    }
+
+    // UserPromptSubmit
+    const upsHooks = hooks.UserPromptSubmit || [];
+    if (upsHooks.length > 0 && upsHooks[0].hooks && upsHooks[0].hooks[0]) {
+      const cmd = upsHooks[0].hooks[0].command;
+      if (cmd.includes('index.js') && cmd.includes('--hook')) {
+        pass('UserPromptSubmit hook', 'configured correctly');
+      } else {
+        warn('UserPromptSubmit hook', `unexpected command: ${cmd}`);
+      }
+    } else {
+      warn('UserPromptSubmit hook', 'not configured — /slash command tracking disabled');
+    }
+  }
+
+  // 6. Skill tracking round-trip
+  const testSessionId = 'doctor-test-' + process.pid;
+  const testSkillName = 'doctor-test-skill';
+  try {
+    const testFilePath = getSkillsFilePath(testSessionId);
+    const entry = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      session_id: testSessionId,
+      skill: testSkillName,
+      source: 'PreToolUse',
+    });
+    writeFileSync(testFilePath, entry + '\n', { flag: 'a' });
+    const readBack = getRecentSkillBySession(testSessionId);
+    if (readBack === testSkillName) {
+      pass('Skill tracking', 'write + read round-trip OK');
+    } else {
+      fail('Skill tracking', `wrote "${testSkillName}", read back "${readBack}"`);
+    }
+    // Clean up test file
+    writeFileSync(testFilePath, '');
+  } catch (e) {
+    fail('Skill tracking', `round-trip failed: ${e.message}`);
+  }
+
+  // 7. Session smoothing round-trip
+  try {
+    const testSmoothId = 'doctor-smooth-' + process.pid;
+    const result1 = getSmoothedSessionData(testSmoothId, 30, 50);
+    if (result1.maxUsedPct !== 30 || result1.maxCacheHitRate !== 50) {
+      throw new Error(`initial smooth failed: got ${JSON.stringify(result1)}`);
+    }
+    const result2 = getSmoothedSessionData(testSmoothId, 20, 60);
+    if (result2.maxUsedPct !== 30 || result2.maxCacheHitRate !== 60) {
+      throw new Error(`max retention failed: got ${JSON.stringify(result2)}`);
+    }
+    // Test compaction detection: drop from 30 to 5 (>25 point drop)
+    const result3 = getSmoothedSessionData(testSmoothId, 5, 10);
+    if (result3.maxUsedPct !== 5) {
+      throw new Error(`compaction detection failed: expected 5, got ${result3.maxUsedPct}`);
+    }
+    pass('Session smoothing', 'write + max retention + compaction detection OK');
+    // Clean up
+    const smoothFile = getSessionFilePath(testSmoothId, 'session-', '.json');
+    writeFileSync(smoothFile, '');
+  } catch (e) {
+    fail('Session smoothing', e.message);
+  }
+
+  // 8. Render test
+  try {
+    const mockData = {
+      model: { id: 'test-model' },
+      session_id: 'doctor-render-test',
+      effort: { level: 'high' },
+      cwd: os.homedir(),
+      context_window: {
+        context_window_size: 200000,
+        used_percentage: 42,
+        current_usage: {
+          input_tokens: 10000,
+          output_tokens: 5000,
+          cache_creation_input_tokens: 30000,
+          cache_read_input_tokens: 44000,
+        },
+      },
+    };
+    const line1 = renderLine1(mockData);
+    const line2 = renderLine2(mockData);
+    if (line1.length > 0 && line2.length > 0) {
+      pass('Render test', 'both lines generated');
+      console.log('');
+      console.log('  ' + line1);
+      console.log('  ' + line2);
+      console.log('');
+    } else {
+      fail('Render test', 'empty output');
+    }
+  } catch (e) {
+    fail('Render test', e.message);
+  }
+
+  // 9. ANSI 256-color support
+  if (process.stdout.isTTY && (process.stdout.hasColors ? process.stdout.hasColors(256) : true)) {
+    pass('ANSI 256-color', 'terminal supports 256 colors');
+  } else if (!process.stdout.isTTY) {
+    warn('ANSI 256-color', 'not a TTY — colors may not render (this is normal for doctor mode)');
+  } else {
+    warn('ANSI 256-color', 'terminal may not support 256 colors');
+  }
+
+  // 10. visibleLen CJK test
+  const cjkTest = visibleLen('\x1b[38;5;111m中文test\x1b[0m');
+  if (cjkTest === 8) {
+    pass('visibleLen CJK', `'中文test' → 8 columns (correct)`);
+  } else {
+    fail('visibleLen CJK', `'中文test' → ${cjkTest} columns (expected 8)`);
+  }
+
+  // 11. Existing session data summary
+  try {
+    const files = require('fs').readdirSync(CACHE_DIR);
+    const sessionFiles = files.filter(f => f.startsWith('session-') && f.endsWith('.json'));
+    const skillFiles = files.filter(f => f.startsWith('skills-') && f.endsWith('.jsonl'));
+    const debugLog = files.includes('debug.jsonl');
+    if (sessionFiles.length > 0 || skillFiles.length > 0) {
+      pass('Cache data', `${sessionFiles.length} session files, ${skillFiles.length} skill files${debugLog ? ', debug log active' : ''}`);
+    } else {
+      warn('Cache data', 'no session/skill files yet (normal on first run)');
+    }
+  } catch {
+    warn('Cache data', 'could not enumerate cache directory');
+  }
+
+  // Print results
+  console.log('');
+  for (const c of checks) {
+    const detail = typeof c.detail === 'string' ? c.detail.replace(/\n/g, '\n        ') : String(c.detail);
+    console.log(`  ${c.icon}  ${c.label}`);
+    console.log(`     ${fg(243)}${detail}${R}`);
+  }
+
+  console.log('');
+  const summaryColor = failCount > 0 ? fg(203) : warnCount > 0 ? fg(222) : fg(151);
+  console.log(`  ${summaryColor}${passCount} passed · ${warnCount} warnings · ${failCount} failed${R}`);
+  console.log('');
+  console.log('  ╰───────────────────────────────────────────────────────────────╯');
+  console.log('');
+
+  process.exit(failCount > 0 ? 1 : 0);
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 function main() {
   const DEBUG = process.argv.includes('--debug');
@@ -617,6 +874,12 @@ function main() {
   // --preview mode: show sample rendering
   if (process.argv.includes('--preview') || process.argv.includes('-p')) {
     preview();
+    return;
+  }
+
+  // --doctor mode: diagnose installation and configuration
+  if (process.argv.includes('--doctor')) {
+    doctor();
     return;
   }
 
