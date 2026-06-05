@@ -44,13 +44,13 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
 
 ## Installation
 
-### Quick install (one-liner)
+### Quick install (one sentence)
 
-```bash
-git clone https://github.com/zesming/ccstatus.git ~/ccstatuslite && node ~/ccstatuslite/index.js --install
-```
+Paste this into Claude Code:
 
-Clones the repo, auto-configures `~/.claude/settings.json`, and shows a preview. Restart Claude Code — done.
+> 阅读 https://github.com/zesming/ccstatus/blob/main/README.md 然后安装配置一下
+
+Claude Code will read the instructions and set everything up for you.
 
 ### Manual install
 
