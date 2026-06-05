@@ -1,4 +1,4 @@
-# ccstatusline-custom
+# ccstatuslite
 
 A minimal two-line status bar for [Claude Code](https://claude.ai/code). Zero dependencies, pure Node.js.
 
@@ -45,13 +45,13 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
 ### 1. Clone
 
 ```bash
-git clone https://github.com/zesming/ccstatus.git ~/ccstatusline-custom
+git clone https://github.com/zesming/ccstatus.git ~/ccstatuslite
 ```
 
 ### 2. Verify
 
 ```bash
-node ~/ccstatusline-custom/index.js --preview
+node ~/ccstatuslite/index.js --preview
 ```
 
 You should see sample output with all effort levels, a progress bar, and a mock skill.
@@ -64,7 +64,7 @@ Add these blocks to `~/.claude/settings.json`:
 {
   "statusLine": {
     "type": "command",
-    "command": "node /Users/YOUR_USER/ccstatusline-custom/index.js",
+    "command": "node /Users/YOUR_USER/ccstatuslite/index.js",
     "refreshInterval": 10
   },
   "hooks": {
@@ -74,7 +74,7 @@ Add these blocks to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "node /Users/YOUR_USER/ccstatusline-custom/index.js --hook"
+            "command": "node /Users/YOUR_USER/ccstatuslite/index.js --hook"
           }
         ]
       }
@@ -84,7 +84,7 @@ Add these blocks to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "node /Users/YOUR_USER/ccstatusline-custom/index.js --hook"
+            "command": "node /Users/YOUR_USER/ccstatuslite/index.js --hook"
           }
         ]
       }
@@ -108,7 +108,7 @@ Skill call or /slash command
   → PreToolUse / UserPromptSubmit hook fires
   → node index.js --hook
   → reads stdin: {session_id, hook_event_name, tool_input}
-  → appends to ~/.cache/ccstatusline-custom/skills-<sessionId>.jsonl
+  → appends to ~/.cache/ccstatuslite/skills-<sessionId>.jsonl
 
 Statusline render (every 10s)
   → stdin = StatusJSON {session_id, ...}
@@ -147,9 +147,9 @@ If the progress bar is behaving unexpectedly (e.g., jumping values), you can ena
 
 1. Edit `~/.claude/settings.json` and add `--debug` to the statusLine command:
    ```json
-   "command": "node /Users/YOUR_USER/ccstatusline-custom/index.js --debug"
+   "command": "node /Users/YOUR_USER/ccstatuslite/index.js --debug"
    ```
-2. Use Claude Code normally — raw payloads are appended to `~/.cache/ccstatusline-custom/debug.jsonl`
+2. Use Claude Code normally — raw payloads are appended to `~/.cache/ccstatuslite/debug.jsonl`
 3. Inspect the log to see what `used_percentage` and `current_usage` values Claude Code is reporting
 
 Remove `--debug` when done.
@@ -159,7 +159,7 @@ Remove `--debug` when done.
 Run a comprehensive self-diagnostic to verify everything is working correctly:
 
 ```bash
-node ~/ccstatusline-custom/index.js --doctor
+node ~/ccstatuslite/index.js --doctor
 ```
 
 This checks 14 aspects of the installation:
@@ -168,7 +168,7 @@ This checks 14 aspects of the installation:
 |-------|-----------------|
 | Node.js version | ≥ 14 required |
 | index.js readable | File integrity |
-| Cache directory | `~/.cache/ccstatusline-custom/` is readable and writable |
+| Cache directory | `~/.cache/ccstatuslite/` is readable and writable |
 | Git available | `git` is in PATH |
 | Git branch detection | Can detect branch name from current directory |
 | statusLine config | `~/.claude/settings.json` points to this file |
@@ -186,7 +186,7 @@ Exit code is `0` when all checks pass, `1` if any check fails — useful for scr
 ## Files
 
 ```
-ccstatusline-custom/
+ccstatuslite/
 ├── index.js          # Main script (~500 lines, zero dependencies)
 ├── package.json      # Metadata
 ├── preview.html      # Browser-based visual preview

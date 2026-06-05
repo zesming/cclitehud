@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ccstatusline-custom — A custom two-line Claude Code statusline.
+ * ccstatuslite — A lightweight two-line Claude Code statusline.
  *
  * Line 1   Model · Effort · Directory · Git branch · Recent skill
  * Line 2   Context window progress bar with cache-breakdown + percentages
@@ -206,14 +206,14 @@ function shortPath(fullPath, maxDepth) {
 // with a --hook subcommand for writing (called from Claude Code hooks).
 //
 // Hook mode  (--hook):   stdin = {session_id, hook_event_name, tool_name, tool_input}
-//                         → appends to ~/.cache/ccstatusline-custom/skills-<sessionId>.jsonl
+//                         → appends to ~/.cache/ccstatuslite/skills-<sessionId>.jsonl
 //
 // Normal mode (piped):   stdin = StatusJSON {session_id, ...}
 //                         → reads JSONL for current session, returns last skill
 //
 // This gives reliable per-session isolation using Claude Code's own session_id,
 // no PPID guessing or TTL hacks needed.
-const CACHE_DIR = path.join(os.homedir(), '.cache', 'ccstatusline-custom');
+const CACHE_DIR = path.join(os.homedir(), '.cache', 'ccstatuslite');
 
 /** Sanitize session ID to prevent path traversal in file names */
 function sanitizeSessionId(id) {
@@ -547,7 +547,7 @@ function preview() {
   const efforts = ['low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
 
   console.log('');
-  console.log('  ╭──────────────── Preview — ccstatusline-custom ────────────────╮');
+  console.log('  ╭──────────────── Preview — ccstatuslite ────────────────╮');
   console.log('');
 
   // ── Line 1 — all effort level variants ──
@@ -616,7 +616,7 @@ function doctor() {
   const fail = (label, detail) => { checks.push({ icon: '❌', label, detail }); failCount++; };
 
   console.log('');
-  console.log('  ╭──────────────── Doctor — ccstatusline-custom ────────────────╮');
+  console.log('  ╭──────────────── Doctor — ccstatuslite ────────────────╮');
   console.log('');
 
   // 1. Node.js version
@@ -689,7 +689,7 @@ function doctor() {
 
       if (resolvedCmd === resolvedSelf) {
         pass('statusLine config', `command points to this file (refreshInterval: ${sl.refreshInterval || 'default'})`);
-      } else if (cmdPath.includes('ccstatusline-custom')) {
+      } else if (cmdPath.includes('ccstatuslite')) {
         warn('statusLine config', `path mismatch:\n        settings → ${cmdPath}\n        actual   → ${resolvedSelf}`);
       } else {
         warn('statusLine config', `points to different script: ${cmdPath}`);
@@ -888,7 +888,7 @@ function main() {
   try {
     raw = readFileSync(0, 'utf8'); // fd 0 = stdin
   } catch {
-    console.error('ccstatusline-custom: no stdin data. Run with --preview to see a sample.');
+    console.error('ccstatuslite: no stdin data. Run with --preview to see a sample.');
     process.exit(0);
   }
 
@@ -896,7 +896,7 @@ function main() {
   try {
     data = JSON.parse(raw);
   } catch {
-    console.error('ccstatusline-custom: failed to parse stdin JSON');
+    console.error('ccstatuslite: failed to parse stdin JSON');
     process.exit(0);
   }
 
