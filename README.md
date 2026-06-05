@@ -5,8 +5,33 @@ A minimal two-line status bar for [Claude Code](https://claude.ai/code). Zero de
 Inspired by the official [ccstatusline](https://github.com/anthropics/ccstatusline), with added proxy smoothing, CJK-aware width calculation, and context compaction detection.
 
 ```
-deepseek-v4-pro  ·  ◆ max  ·  ~/Projects  ·  ⎇ main  ·  ✦ brainstorming
+╭──────────────── Preview — ccstatuslite ────────────────╮
+
+deepseek-v4-pro · ◆ low · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+deepseek-v4-pro · ◆ medium · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+deepseek-v4-pro · ◆ high · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+deepseek-v4-pro · ◆ xhigh · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+deepseek-v4-pro · ◆ ultra · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+deepseek-v4-pro · ◆ max · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
+
 ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░░░░░░░░░] 45% · ↖ cached 60%
+
+Variants:
+  Low usage (12%), 90% cached hit rate
+  ctx 1M [▓▓▓▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 12% · ↖ cached 90%
+  High usage (85%), 56% cached hit rate
+  ctx 200K [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒░░░░░] 85% · ↖ cached 56%
+  Medium usage (45%), no cache
+  ctx 200K [▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░] 45%
+
+Legend:
+▓▓▓▓▓▓▓▓▓▓  cached (▓ 75% density, brighter)
+▒▒▒▒▒▒▒▒▒▒  uncached (▒ 50% density, darker)
+░░░░░░░░░░  empty (░ 25% density, pixel dots)
+
+Effort icon: ◆ (unified for all levels — color indicates intensity)
+
+╰───────────────────────────────────────────────────────────────╯
 ```
 
 ## What it shows
