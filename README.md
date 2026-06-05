@@ -44,13 +44,23 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
 
 ## Installation
 
-### 1. Clone
+### Quick install (one-liner)
+
+```bash
+git clone https://github.com/zesming/ccstatus.git ~/ccstatuslite && node ~/ccstatuslite/index.js --install
+```
+
+Clones the repo, auto-configures `~/.claude/settings.json`, and shows a preview. Restart Claude Code — done.
+
+### Manual install
+
+#### 1. Clone
 
 ```bash
 git clone https://github.com/zesming/ccstatus.git ~/ccstatuslite
 ```
 
-### 2. Verify
+#### 2. Verify
 
 ```bash
 node ~/ccstatuslite/index.js --preview
@@ -58,7 +68,7 @@ node ~/ccstatuslite/index.js --preview
 
 You should see sample output with all effort levels, a progress bar, and a mock skill.
 
-### 3. Configure Claude Code
+#### 3. Configure Claude Code
 
 Add these blocks to `~/.claude/settings.json`:
 
@@ -97,7 +107,7 @@ Add these blocks to `~/.claude/settings.json`:
 
 > Replace `/Users/YOUR_USER/` with your actual home path. Merge with any existing `statusLine` and `hooks` keys — don't overwrite the whole file.
 
-### 4. Restart Claude Code
+#### 4. Restart Claude Code
 
 The new statusline takes effect on next launch.
 

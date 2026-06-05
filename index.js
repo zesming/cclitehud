@@ -604,6 +604,59 @@ function preview() {
   console.log('');
 }
 
+// ─── Install mode ────────────────────────────────────────────────────────────
+function install() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  const selfPath = path.resolve(__filename);
+  const cmd = `node ${selfPath}`;
+
+  let settings = {};
+  try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch {}
+
+  // statusLine
+  settings.statusLine = {
+    type: 'command',
+    command: cmd,
+    refreshInterval: 10,
+  };
+
+  // hooks — merge with existing
+  const hooks = settings.hooks || {};
+  hooks.PreToolUse = hooks.PreToolUse || [];
+  hooks.UserPromptSubmit = hooks.UserPromptSubmit || [];
+
+  // PreToolUse Skill hook
+  const skillMatcher = hooks.PreToolUse.find(h => h.matcher === 'Skill');
+  if (skillMatcher) {
+    skillMatcher.hooks = [{ type: 'command', command: `${cmd} --hook` }];
+  } else {
+    hooks.PreToolUse.push({
+      matcher: 'Skill',
+      hooks: [{ type: 'command', command: `${cmd} --hook` }],
+    });
+  }
+
+  // UserPromptSubmit hook
+  hooks.UserPromptSubmit = [{
+    hooks: [{ type: 'command', command: `${cmd} --hook` }],
+  }];
+
+  settings.hooks = hooks;
+
+  try { mkdirSync(path.dirname(settingsPath), { recursive: true }); } catch {}
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+
+  console.log(`✅  ccstatuslite installed!`);
+  console.log(`   statusLine → ${cmd}`);
+  console.log(`   hooks      → PreToolUse + UserPromptSubmit`);
+  console.log(`   config     → ${settingsPath}`);
+  console.log(`   Restart Claude Code to activate.`);
+
+  // Also run preview to confirm it works
+  console.log('');
+  preview();
+}
+
 // ─── Doctor mode ─────────────────────────────────────────────────────────────
 function doctor() {
   const checks = [];
@@ -880,6 +933,12 @@ function main() {
   // --doctor mode: diagnose installation and configuration
   if (process.argv.includes('--doctor')) {
     doctor();
+    return;
+  }
+
+  // --install mode: auto-configure ~/.claude/settings.json
+  if (process.argv.includes('--install')) {
+    install();
     return;
   }
 
