@@ -282,46 +282,39 @@ function getRecentSkill(data) {
 // ─── Session smoothing (fixes proxy per-call reporting) ──────────────────────
 // Some API proxies (including certain gateway/proxy setups) report token usage
 // per-API-call rather than cumulative session totals. When multiple sub-agents
-// make concurrent calls with different context sizes, used_percentage and
-// current_usage jump wildly between renders.
+// make concurrent calls with different context sizes, used_percentage jumps
+// wildly between renders.
 //
-// Fix: persist per-session max values. Session context only grows (until
-// compaction), so taking the max across renders gives a stable, monotonically
-// increasing bar. Cache hit rate is smoothed the same way.
+// Fix: persist per-session max for usedPct (monotonically increasing).
 // Compaction detection: if the current value drops significantly below the
 // stored max, we assume a compaction occurred and reset to current values.
+// Note: cacheHitRate is NOT smoothed — it's a per-call metric that should
+// reflect the real-time value.
 
 function getSessionFilePath(sessionId, prefix, ext) {
   return path.join(CACHE_DIR, prefix + sanitizeSessionId(sessionId) + ext);
 }
 
-function getSmoothedSessionData(sessionId, usedPct, cacheHitRate) {
-  if (!sessionId) return { maxUsedPct: usedPct, maxCacheHitRate: cacheHitRate };
+function getSmoothedUsedPct(sessionId, usedPct) {
+  if (!sessionId) return usedPct;
   const filePath = getSessionFilePath(sessionId, 'session-', '.json');
-  let prev = { maxUsedPct: 0, maxCacheHitRate: 0 };
+  let prev = { maxUsedPct: 0 };
   try {
     prev = JSON.parse(readFileSync(filePath, 'utf8'));
   } catch {}
 
   // Compaction detection: if usedPct drops more than 25 points below the
-  // stored max, context compaction likely occurred — reset to current values.
+  // stored max, context compaction likely occurred — reset to current value.
   const COMPACTION_THRESHOLD = 25;
-  let maxUsedPct, maxCacheHitRate;
-  if ((prev.maxUsedPct || 0) - usedPct >= COMPACTION_THRESHOLD) {
-    // Compaction happened — reset both values
-    maxUsedPct = usedPct;
-    maxCacheHitRate = cacheHitRate;
-  } else {
-    maxUsedPct = Math.max(prev.maxUsedPct || 0, usedPct);
-    maxCacheHitRate = Math.max(prev.maxCacheHitRate || 0, cacheHitRate);
-  }
+  const maxUsedPct = ((prev.maxUsedPct || 0) - usedPct >= COMPACTION_THRESHOLD)
+    ? usedPct
+    : Math.max(prev.maxUsedPct || 0, usedPct);
 
-  const smoothed = { maxUsedPct, maxCacheHitRate };
   try {
     mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(filePath, JSON.stringify(smoothed));
+    writeFileSync(filePath, JSON.stringify({ maxUsedPct }));
   } catch {}
-  return smoothed;
+  return maxUsedPct;
 }
 
 // ─── Context-size formatter ──────────────────────────────────────────────────
@@ -475,11 +468,10 @@ function renderLine2(data) {
     }
   }
 
-  // Smooth out per-call jitter from proxy APIs — take session max
+  // Smooth out per-call jitter from proxy APIs — only usedPct needs smoothing
+  // (context only grows); cacheHitRate uses the real-time value directly.
   const sessionId = data.session_id;
-  const smoothed = getSmoothedSessionData(sessionId, usedPct, cacheHitRate);
-  usedPct = smoothed.maxUsedPct;
-  cacheHitRate = smoothed.maxCacheHitRate;
+  usedPct = getSmoothedUsedPct(sessionId, usedPct);
 
   const bar = renderBar(usedPct, cacheHitRate, CONFIG.barWidth);
   const pctStr = usedPct.toFixed(0) + '%';
@@ -807,21 +799,21 @@ function doctor() {
     fail('Skill tracking', `round-trip failed: ${e.message}`);
   }
 
-  // 7. Session smoothing round-trip
+  // 7. Session smoothing round-trip (usedPct only — cacheHitRate is not smoothed)
   try {
     const testSmoothId = 'doctor-smooth-' + process.pid;
-    const result1 = getSmoothedSessionData(testSmoothId, 30, 50);
-    if (result1.maxUsedPct !== 30 || result1.maxCacheHitRate !== 50) {
-      throw new Error(`initial smooth failed: got ${JSON.stringify(result1)}`);
+    const r1 = getSmoothedUsedPct(testSmoothId, 30);
+    if (r1 !== 30) {
+      throw new Error(`initial smooth failed: expected 30, got ${r1}`);
     }
-    const result2 = getSmoothedSessionData(testSmoothId, 20, 60);
-    if (result2.maxUsedPct !== 30 || result2.maxCacheHitRate !== 60) {
-      throw new Error(`max retention failed: got ${JSON.stringify(result2)}`);
+    const r2 = getSmoothedUsedPct(testSmoothId, 20);
+    if (r2 !== 30) {
+      throw new Error(`max retention failed: expected 30, got ${r2}`);
     }
     // Test compaction detection: drop from 30 to 5 (>25 point drop)
-    const result3 = getSmoothedSessionData(testSmoothId, 5, 10);
-    if (result3.maxUsedPct !== 5) {
-      throw new Error(`compaction detection failed: expected 5, got ${result3.maxUsedPct}`);
+    const r3 = getSmoothedUsedPct(testSmoothId, 5);
+    if (r3 !== 5) {
+      throw new Error(`compaction detection failed: expected 5, got ${r3}`);
     }
     pass('Session smoothing', 'write + max retention + compaction detection OK');
     // Clean up
