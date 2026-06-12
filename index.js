@@ -24,7 +24,6 @@ const CONFIG = {
 
 // ─── 256-color palette (muted, modern, not garish) ──────────────────────────
 const C = {
-  reset: 0,
   // Semantic
   model: 117, // soft sky blue
   effort: { low: 151, medium: 222, high: 215, xhigh: 210, ultra: 203, max: 209 },
@@ -42,9 +41,7 @@ const C = {
 };
 
 // ─── ANSI helpers ────────────────────────────────────────────────────────────
-const ansi = (code) => `\x1b[${code}m`;
 const fg = (n) => `\x1b[38;5;${n}m`;
-const bg = (n) => `\x1b[48;5;${n}m`;
 const R = '\x1b[0m';
 const B = '\x1b[1m';
 const D = '\x1b[2m';
@@ -81,6 +78,12 @@ function visibleLen(str) {
 // Non-breaking space — prevents VSCode trimming
 const NBSP = ' ';
 
+// Safe numeric coercion — prevents string concatenation bugs (e.g. "500"+"1000" → "5001000")
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 // ─── Glyphs ──────────────────────────────────────────────────────────────────
 // Shade characters: density creates visual tiers WITHOUT ANSI color boundaries
 // ▓ (75%) → looks bright  ·  ▒ (50%) → looks darker  ·  ░ (25%) → pixel dots
@@ -109,16 +112,16 @@ function getModelId(raw) {
 function getContextSize(modelId) {
   // Check exact match first
   if (MODEL_CONTEXT[modelId]) return MODEL_CONTEXT[modelId];
-  // Check if modelId contains a known key
-  for (const [key, size] of Object.entries(MODEL_CONTEXT)) {
-    if (modelId.includes(key)) return size;
-  }
-  // Parse [1M] / [200K] suffix from model string
+  // Parse [1M] / [200K] suffix from model string (must come before fuzzy includes)
   const m = /\[(\d+(?:\.\d+)?)\s*([mMkK])\]/.exec(modelId);
   if (m) {
     const val = parseFloat(m[1]);
     const unit = m[2].toLowerCase();
     return Math.round(val * (unit === 'm' ? 1_000_000 : 1_000));
+  }
+  // Check if modelId contains a known key (fuzzy fallback)
+  for (const [key, size] of Object.entries(MODEL_CONTEXT)) {
+    if (modelId.includes(key)) return size;
   }
   return 200000; // default
 }
@@ -191,7 +194,7 @@ function shortPath(fullPath, maxDepth) {
   if (!fullPath) return '?';
   const home = os.homedir();
   let display = fullPath;
-  if (fullPath.startsWith(home)) {
+  if (fullPath === home || fullPath.startsWith(home + path.sep)) {
     display = '~' + fullPath.slice(home.length);
   }
   const parts = display.split(path.sep).filter(Boolean);
@@ -225,6 +228,17 @@ function getSkillsFilePath(sessionId) {
   return path.join(CACHE_DIR, 'skills-' + sanitizeSessionId(sessionId) + '.jsonl');
 }
 
+/** Strip ANSI/control characters and bound length to prevent terminal injection */
+function sanitizeDisplay(str, maxLen) {
+  if (!str) return '';
+  const cleaned = String(str)
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // CSI sequences (SGR, cursor, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')  // OSC sequences
+    .replace(/\x1b[()][AB012]/g, '')         // charset selection
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, '');   // C0 + C1 control characters
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen - 1) + '…' : cleaned;
+}
+
 /** Handle --hook: parse hook payload from stdin, write skill invocation to JSONL */
 function handleHook() {
   let raw = '';
@@ -238,7 +252,7 @@ function handleHook() {
 
   let skillName = '';
   if (data.hook_event_name === 'PreToolUse' && data.tool_name === 'Skill') {
-    skillName = (data.tool_input && data.tool_input.skill) || '';
+    skillName = sanitizeDisplay((data.tool_input && data.tool_input.skill) || '', 80);
   } else if (data.hook_event_name === 'UserPromptSubmit') {
     const m = /^\/([a-zA-Z0-9_:-]+)(?:\s|$)/.exec(data.prompt || '');
     if (m) skillName = m[1];
@@ -263,9 +277,14 @@ function getRecentSkillBySession(sessionId) {
   try {
     const raw = readFileSync(filePath, 'utf8');
     const lines = raw.trim().split('\n').filter(Boolean);
-    if (lines.length === 0) return null;
-    const last = JSON.parse(lines[lines.length - 1]);
-    return (last && last.skill) || null;
+    // Scan backward for the last parseable line (resilient to partial writes)
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry && entry.skill) return entry.skill;
+      } catch { /* corrupt line — try previous */ }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -277,44 +296,6 @@ function getRecentSkill(data) {
     return getRecentSkillBySession(data.session_id);
   }
   return null;
-}
-
-// ─── Session smoothing (fixes proxy per-call reporting) ──────────────────────
-// Some API proxies (including certain gateway/proxy setups) report token usage
-// per-API-call rather than cumulative session totals. When multiple sub-agents
-// make concurrent calls with different context sizes, used_percentage jumps
-// wildly between renders.
-//
-// Fix: persist per-session max for usedPct (monotonically increasing).
-// Compaction detection: if the current value drops significantly below the
-// stored max, we assume a compaction occurred and reset to current values.
-// Note: cacheHitRate is NOT smoothed — it's a per-call metric that should
-// reflect the real-time value.
-
-function getSessionFilePath(sessionId, prefix, ext) {
-  return path.join(CACHE_DIR, prefix + sanitizeSessionId(sessionId) + ext);
-}
-
-function getSmoothedUsedPct(sessionId, usedPct) {
-  if (!sessionId) return usedPct;
-  const filePath = getSessionFilePath(sessionId, 'session-', '.json');
-  let prev = { maxUsedPct: 0 };
-  try {
-    prev = JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {}
-
-  // Compaction detection: if usedPct drops more than 25 points below the
-  // stored max, context compaction likely occurred — reset to current value.
-  const COMPACTION_THRESHOLD = 25;
-  const maxUsedPct = ((prev.maxUsedPct || 0) - usedPct >= COMPACTION_THRESHOLD)
-    ? usedPct
-    : Math.max(prev.maxUsedPct || 0, usedPct);
-
-  try {
-    mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(filePath, JSON.stringify({ maxUsedPct }));
-  } catch {}
-  return maxUsedPct;
 }
 
 // ─── Context-size formatter ──────────────────────────────────────────────────
@@ -441,14 +422,14 @@ function renderLine2(data) {
 
   // Total context usage percentage (from Claude Code — already correct)
   let usedPct = 0;
-  if (typeof ctx.used_percentage === 'number') {
+  if (typeof ctx.used_percentage === 'number' && Number.isFinite(ctx.used_percentage)) {
     usedPct = ctx.used_percentage;
   } else if (ctx.current_usage) {
     const cu = ctx.current_usage;
     const actual =
-      (typeof cu === 'object' ? (cu.input_tokens || 0) : cu) +
-      (typeof cu === 'object' ? (cu.cache_creation_input_tokens || 0) : 0) +
-      (typeof cu === 'object' ? (cu.cache_read_input_tokens || 0) : 0);
+      (typeof cu === 'object' ? num(cu.input_tokens) : num(cu)) +
+      (typeof cu === 'object' ? num(cu.cache_creation_input_tokens) : 0) +
+      (typeof cu === 'object' ? num(cu.cache_read_input_tokens) : 0);
     usedPct = (actual / ctxSize) * 100;
   }
 
@@ -459,19 +440,14 @@ function renderLine2(data) {
   let cacheHitRate = 0;
   if (ctx.current_usage && typeof ctx.current_usage === 'object') {
     const cu = ctx.current_usage;
-    const fresh = cu.input_tokens || 0;
-    const create = cu.cache_creation_input_tokens || 0;
-    const read = cu.cache_read_input_tokens || 0;
+    const fresh = num(cu.input_tokens);
+    const create = num(cu.cache_creation_input_tokens);
+    const read = num(cu.cache_read_input_tokens);
     const actual = fresh + create + read;
     if (actual > 0) {
       cacheHitRate = Math.min(100, (read / actual) * 100);
     }
   }
-
-  // Smooth out per-call jitter from proxy APIs — only usedPct needs smoothing
-  // (context only grows); cacheHitRate uses the real-time value directly.
-  const sessionId = data.session_id;
-  usedPct = getSmoothedUsedPct(sessionId, usedPct);
 
   const bar = renderBar(usedPct, cacheHitRate, CONFIG.barWidth);
   const pctStr = usedPct.toFixed(0) + '%';
@@ -597,10 +573,17 @@ function preview() {
 }
 
 // ─── Install mode ────────────────────────────────────────────────────────────
+/** Shell-quote a path for safe embedding in command strings */
+function shellQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
 function install() {
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   const selfPath = path.resolve(__filename);
-  const cmd = `node ${selfPath}`;
+  const nodePath = process.execPath || 'node';
+  const cmd = `${shellQuote(nodePath)} ${shellQuote(selfPath)}`;
+  const hookCmd = `${cmd} --hook`;
 
   let settings = {};
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch {}
@@ -612,26 +595,42 @@ function install() {
     refreshInterval: 10,
   };
 
-  // hooks — merge with existing
+  // hooks — merge with existing, preserving other hooks
   const hooks = settings.hooks || {};
-  hooks.PreToolUse = hooks.PreToolUse || [];
-  hooks.UserPromptSubmit = hooks.UserPromptSubmit || [];
+  if (!Array.isArray(hooks.PreToolUse)) hooks.PreToolUse = [];
+  if (!Array.isArray(hooks.UserPromptSubmit)) hooks.UserPromptSubmit = [];
 
-  // PreToolUse Skill hook
-  const skillMatcher = hooks.PreToolUse.find(h => h.matcher === 'Skill');
-  if (skillMatcher) {
-    skillMatcher.hooks = [{ type: 'command', command: `${cmd} --hook` }];
-  } else {
-    hooks.PreToolUse.push({
-      matcher: 'Skill',
-      hooks: [{ type: 'command', command: `${cmd} --hook` }],
-    });
+  // Helper: upsert our hook command within a matcher entry's hooks array
+  // Detect our own hooks by checking for the script's basename + --hook flag
+  const selfBasename = path.basename(selfPath);
+  function upsertHook(entry) {
+    if (!Array.isArray(entry.hooks)) entry.hooks = [];
+    const idx = entry.hooks.findIndex(h =>
+      h && typeof h.command === 'string'
+      && h.command.includes(selfBasename)
+      && h.command.includes('--hook'));
+    if (idx >= 0) {
+      entry.hooks[idx] = { type: 'command', command: hookCmd };
+    } else {
+      entry.hooks.push({ type: 'command', command: hookCmd });
+    }
   }
 
-  // UserPromptSubmit hook
-  hooks.UserPromptSubmit = [{
-    hooks: [{ type: 'command', command: `${cmd} --hook` }],
-  }];
+  // PreToolUse Skill hook — upsert by matcher
+  let skillMatcher = hooks.PreToolUse.find(h => h && h.matcher === 'Skill');
+  if (!skillMatcher) {
+    skillMatcher = { matcher: 'Skill', hooks: [] };
+    hooks.PreToolUse.push(skillMatcher);
+  }
+  upsertHook(skillMatcher);
+
+  // UserPromptSubmit hook — upsert (preserve other UserPromptSubmit hooks)
+  let upsEntry = hooks.UserPromptSubmit.find(h => h && !h.matcher);
+  if (!upsEntry) {
+    upsEntry = { hooks: [] };
+    hooks.UserPromptSubmit.push(upsEntry);
+  }
+  upsertHook(upsEntry);
 
   settings.hooks = hooks;
 
@@ -724,9 +723,15 @@ function doctor() {
     // Check statusLine
     const sl = settings.statusLine;
     if (sl && sl.type === 'command' && typeof sl.command === 'string') {
-      const cmdPath = sl.command.replace(/^node\s+/, '').split(' ')[0];
+      // Parse command — handle both `node /path` and `'/path/node' '/path/index.js'` formats
+      const rawCmd = sl.command;
+      // Extract script path: last quoted or unquoted segment that looks like a file path
+      const quotedPaths = [...rawCmd.matchAll(/'([^']+)'/g)].map(m => m[1]);
+      const scriptPath = quotedPaths.length >= 2
+        ? quotedPaths[1]                          // second quoted arg = script
+        : rawCmd.replace(/^node\s+/, '').split(' ')[0]; // legacy format
       // Resolve to absolute for comparison
-      let resolvedCmd = cmdPath;
+      let resolvedCmd = scriptPath;
       if (!path.isAbsolute(resolvedCmd)) {
         resolvedCmd = path.resolve(path.dirname(settingsPath), resolvedCmd);
       }
@@ -734,10 +739,10 @@ function doctor() {
 
       if (resolvedCmd === resolvedSelf) {
         pass('statusLine config', `command points to this file (refreshInterval: ${sl.refreshInterval || 'default'})`);
-      } else if (cmdPath.includes('ccstatuslite')) {
-        warn('statusLine config', `path mismatch:\n        settings → ${cmdPath}\n        actual   → ${resolvedSelf}`);
+      } else if (scriptPath.includes('ccstatuslite')) {
+        warn('statusLine config', `path mismatch:\n        settings → ${scriptPath}\n        actual   → ${resolvedSelf}`);
       } else {
-        warn('statusLine config', `points to different script: ${cmdPath}`);
+        warn('statusLine config', `points to different script: ${scriptPath}`);
       }
     } else {
       fail('statusLine config', 'missing or invalid statusLine in settings.json');
@@ -745,7 +750,6 @@ function doctor() {
 
     // Check hooks
     const hooks = settings.hooks || {};
-    const expectedCmd = `node ${path.resolve(selfPath)} --hook`;
 
     // PreToolUse → Skill
     const preHooks = hooks.PreToolUse || [];
@@ -799,31 +803,7 @@ function doctor() {
     fail('Skill tracking', `round-trip failed: ${e.message}`);
   }
 
-  // 7. Session smoothing round-trip (usedPct only — cacheHitRate is not smoothed)
-  try {
-    const testSmoothId = 'doctor-smooth-' + process.pid;
-    const r1 = getSmoothedUsedPct(testSmoothId, 30);
-    if (r1 !== 30) {
-      throw new Error(`initial smooth failed: expected 30, got ${r1}`);
-    }
-    const r2 = getSmoothedUsedPct(testSmoothId, 20);
-    if (r2 !== 30) {
-      throw new Error(`max retention failed: expected 30, got ${r2}`);
-    }
-    // Test compaction detection: drop from 30 to 5 (>25 point drop)
-    const r3 = getSmoothedUsedPct(testSmoothId, 5);
-    if (r3 !== 5) {
-      throw new Error(`compaction detection failed: expected 5, got ${r3}`);
-    }
-    pass('Session smoothing', 'write + max retention + compaction detection OK');
-    // Clean up
-    const smoothFile = getSessionFilePath(testSmoothId, 'session-', '.json');
-    writeFileSync(smoothFile, '');
-  } catch (e) {
-    fail('Session smoothing', e.message);
-  }
-
-  // 8. Render test
+  // 7. Render test
   try {
     const mockData = {
       model: { id: 'test-model' },
