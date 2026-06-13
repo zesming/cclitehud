@@ -1,10 +1,10 @@
 {
-  "name": "ccstatus",
+  "name": "cclitehud",
   "version": "1.0.0",
   "description": "A custom two-line Claude Code statusline with context window progress bar",
   "main": "index.js",
   "bin": {
-    "ccstatus": "./index.js"
+    "cclitehud": "./index.js"
   },
   "scripts": {
     "preview": "node index.js --preview"
