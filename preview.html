@@ -20,6 +20,7 @@
   .bar-fill{color:#9ece6a}
   .bar-empty{color:#2f3349;font-size:12px}
   .bar-pct{color:#cfd3e8;font-weight:700;font-size:13px}
+  .pct-warn{color:#f5a97f}.pct-crit{color:#ed8796}.reset{color:#6e738d;font-size:12px}
   .cache-label{color:#6e738d;opacity:.55;font-size:12px}.cache-val{color:#9ece6a;font-size:12px}
   h2{color:#737aa2;font-size:12px;font-weight:400;margin:28px 0 12px;text-transform:uppercase;letter-spacing:1.5px}
   .effort-row{display:flex;gap:24px;font-size:13px;margin-bottom:4px}
@@ -53,6 +54,12 @@
     <span class="bar-pct">45%</span>
     <span class="cache-label">·</span>
     <span class="cache-val">↖&nbsp;cache&nbsp;60%</span>
+  </div>
+
+  <!-- Line 3 -->
+  <div class="line">
+    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒</span><span class="bar-empty">░░░░░░░░░</span><span class="bracket">]</span><span class="bar-pct">23%</span><span class="reset">↻2h14m</span><span class="sep">·</span>
+    <span class="ctx-label">7d</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░</span><span class="bracket">]</span><span class="bar-pct">61%</span><span class="reset">↻3d5h</span>
   </div>
 
   <h2>🎯 Fix 1: Model — raw ID, no hardcoded mapping</h2>
@@ -100,6 +107,26 @@
       <span class="bar-fill">▒▒▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░</span><span class="bracket">]</span>
       <span class="bar-pct">45%</span>
     </div>
+  </div>
+
+  <hr>
+
+  <h2>Line 3 — Usage limits (subscription logins only)</h2>
+  <div style="color:#565f89;font-size:12px;margin-bottom:12px">
+    Two 12-col bars → same width as line 2 · <code style="color:#a9b1d6">↻</code> reset countdown · hidden when <code style="color:#a9b1d6">rate_limits</code> is absent
+  </div>
+  <div class="variant">
+    <div class="variant-label">Warning (≥80%, orange) and critical (≥95%, red)</div>
+    <div class="line">
+    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░</span><span class="bracket">]</span><span class="bar-pct pct-warn">84%</span><span class="reset">↻38m</span><span class="sep">·</span>
+    <span class="ctx-label">7d</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty"></span><span class="bracket">]</span><span class="bar-pct pct-crit">97%</span><span class="reset">↻20h</span>
+  </div>
+  </div>
+  <div class="variant">
+    <div class="variant-label">Only 5h window reported</div>
+    <div class="line">
+    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒</span><span class="bar-empty">░░░░░░░</span><span class="bracket">]</span><span class="bar-pct">42%</span><span class="reset">↻38m</span>
+  </div>
   </div>
 
   <hr>
