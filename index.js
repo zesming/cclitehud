@@ -13,7 +13,10 @@
  */
 
 const { execSync } = require('child_process');
-const { readFileSync, mkdirSync, writeFileSync, appendFileSync } = require('fs');
+const {
+  readFileSync, mkdirSync, writeFileSync, appendFileSync,
+  existsSync, readdirSync, statSync, unlinkSync,
+} = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -81,6 +84,22 @@ function visibleLen(str) {
   return width;
 }
 
+// Truncate a plain (non-ANSI) string to fit maxWidth display columns, adding
+// an ellipsis when cut. CJK characters count as 2 columns.
+function truncateToWidth(str, maxWidth) {
+  if (visibleLen(str) <= maxWidth) return str;
+  if (maxWidth < 2) return '';
+  let out = '';
+  let width = 0;
+  for (const ch of str) {
+    const w = visibleLen(ch);
+    if (width + w > maxWidth - 1) break;
+    out += ch;
+    width += w;
+  }
+  return out + '…';
+}
+
 // Non-breaking space — prevents VSCode trimming
 const NBSP = ' ';
 
@@ -135,9 +154,9 @@ function getContextSize(modelId) {
 function prettyModel(raw) {
   // Return raw model ID as-is — no prettification, no name mapping
   if (!raw) return '?';
-  if (typeof raw === 'string') return raw.trim();
   // Prefer id over display_name since id is the canonical model identifier
-  return (raw.id || raw.display_name || '?').trim();
+  const id = typeof raw === 'string' ? raw : (raw.id || raw.display_name || '?');
+  return sanitizeDisplay(String(id).trim(), 80) || '?';
 }
 
 // ─── Thinking-effort helpers ─────────────────────────────────────────────────
@@ -223,6 +242,7 @@ function shortPath(fullPath, maxDepth) {
 // This gives reliable per-session isolation using Claude Code's own session_id,
 // no PPID guessing or TTL hacks needed.
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'cclitehud');
+const SKILL_FILE_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // prune session files older than this
 
 /** Sanitize session ID to prevent path traversal in file names */
 function sanitizeSessionId(id) {
@@ -267,6 +287,8 @@ function handleHook() {
 
   const filePath = getSkillsFilePath(sessionId);
   try { mkdirSync(path.dirname(filePath), { recursive: true }); } catch {}
+  // First write for a new session — a cheap moment to prune stale session files
+  if (!existsSync(filePath)) pruneStaleSkillFiles();
   const entry = JSON.stringify({
     timestamp: new Date().toISOString(),
     session_id: sessionId,
@@ -274,6 +296,20 @@ function handleHook() {
     source: data.hook_event_name,
   });
   try { writeFileSync(filePath, entry + '\n', { flag: 'a' }); } catch {}
+}
+
+/** Delete per-session skill files not touched for SKILL_FILE_MAX_AGE_MS */
+function pruneStaleSkillFiles() {
+  const cutoff = Date.now() - SKILL_FILE_MAX_AGE_MS;
+  let files;
+  try { files = readdirSync(CACHE_DIR); } catch { return; }
+  for (const f of files) {
+    if (!f.startsWith('skills-') || !f.endsWith('.jsonl')) continue;
+    const full = path.join(CACHE_DIR, f);
+    try {
+      if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
+    } catch {}
+  }
 }
 
 /** Read the last skill for a given session from its JSONL file */
@@ -378,7 +414,7 @@ function renderLine1(data) {
   const worktreeBranch = data.worktree && data.worktree.branch;
   const gitBranch = worktreeBranch || getGitBranch(cwd);
   if (gitBranch) {
-    parts.push(fg(C.git) + '⎇' + NBSP + gitBranch + R);
+    parts.push(fg(C.git) + '⎇' + NBSP + sanitizeDisplay(gitBranch, 80) + R);
   }
 
   // Recent skill (per-session via session_id from StatusJSON)
@@ -399,14 +435,8 @@ function renderLine1(data) {
       || 120;
     const available = Math.max(0, termWidth - prefixWidth - skillPrefixWidth);
 
-    let skillStr;
-    if (skill.length <= available) {
-      skillStr = skill;
-    } else if (available > 2) {
-      skillStr = skill.slice(0, available - 1) + '…';
-    } else {
-      skillStr = ''; // no room — skip the skill entirely
-    }
+    // CJK-aware: truncate by display columns; skip entirely if no room
+    const skillStr = available > 2 ? truncateToWidth(skill, available) : '';
 
     if (skillStr) {
       parts.push(fg(C.skill) + '✦' + NBSP + skillStr + R);
@@ -759,8 +789,7 @@ function doctor() {
     const testFile = path.join(CACHE_DIR, '.doctor-test');
     writeFileSync(testFile, 'ok');
     readFileSync(testFile, 'utf8');
-    // Clean up — use unlinkSync from fs but we don't import it, use writeFileSync to empty
-    writeFileSync(testFile, '');
+    unlinkSync(testFile);
     pass('Cache directory', `${CACHE_DIR} (read/write)`);
   } catch (e) {
     fail('Cache directory', `${CACHE_DIR} — ${e.message}`);
@@ -820,32 +849,25 @@ function doctor() {
       fail('statusLine config', 'missing or invalid statusLine in settings.json');
     }
 
-    // Check hooks
+    // Check hooks — look for our `index.js --hook` command anywhere in the
+    // matching entries (install() upserts, so it need not be the first hook)
     const hooks = settings.hooks || {};
+    const selfBasename = path.basename(selfPath);
+    const hasOurHook = (entries, matcherOk) => (Array.isArray(entries) ? entries : []).some(e =>
+      e && matcherOk(e.matcher) && Array.isArray(e.hooks) && e.hooks.some(h =>
+        h && typeof h.command === 'string'
+        && h.command.includes(selfBasename) && h.command.includes('--hook')));
 
     // PreToolUse → Skill
-    const preHooks = hooks.PreToolUse || [];
-    const skillHook = preHooks.find(h => h.matcher === 'Skill');
-    if (skillHook && skillHook.hooks && skillHook.hooks[0]) {
-      const cmd = skillHook.hooks[0].command;
-      if (cmd.includes('index.js') && cmd.includes('--hook')) {
-        pass('PreToolUse Skill hook', 'configured correctly');
-      } else {
-        warn('PreToolUse Skill hook', `unexpected command: ${cmd}`);
-      }
+    if (hasOurHook(hooks.PreToolUse, m => m === 'Skill')) {
+      pass('PreToolUse Skill hook', 'configured correctly');
     } else {
       fail('PreToolUse Skill hook', 'not configured — skill tracking disabled');
     }
 
     // UserPromptSubmit
-    const upsHooks = hooks.UserPromptSubmit || [];
-    if (upsHooks.length > 0 && upsHooks[0].hooks && upsHooks[0].hooks[0]) {
-      const cmd = upsHooks[0].hooks[0].command;
-      if (cmd.includes('index.js') && cmd.includes('--hook')) {
-        pass('UserPromptSubmit hook', 'configured correctly');
-      } else {
-        warn('UserPromptSubmit hook', `unexpected command: ${cmd}`);
-      }
+    if (hasOurHook(hooks.UserPromptSubmit, () => true)) {
+      pass('UserPromptSubmit hook', 'configured correctly');
     } else {
       warn('UserPromptSubmit hook', 'not configured — /slash command tracking disabled');
     }
@@ -862,15 +884,14 @@ function doctor() {
       skill: testSkillName,
       source: 'PreToolUse',
     });
-    writeFileSync(testFilePath, entry + '\n', { flag: 'a' });
+    writeFileSync(testFilePath, entry + '\n');
     const readBack = getRecentSkillBySession(testSessionId);
     if (readBack === testSkillName) {
       pass('Skill tracking', 'write + read round-trip OK');
     } else {
       fail('Skill tracking', `wrote "${testSkillName}", read back "${readBack}"`);
     }
-    // Clean up test file
-    writeFileSync(testFilePath, '');
+    unlinkSync(testFilePath);
   } catch (e) {
     fail('Skill tracking', `round-trip failed: ${e.message}`);
   }
@@ -914,7 +935,7 @@ function doctor() {
     fail('Render test', e.message);
   }
 
-  // 9. ANSI 256-color support
+  // 8. ANSI 256-color support
   if (process.stdout.isTTY && (process.stdout.hasColors ? process.stdout.hasColors(256) : true)) {
     pass('ANSI 256-color', 'terminal supports 256 colors');
   } else if (!process.stdout.isTTY) {
@@ -923,7 +944,7 @@ function doctor() {
     warn('ANSI 256-color', 'terminal may not support 256 colors');
   }
 
-  // 10. visibleLen CJK test
+  // 9. visibleLen CJK test
   const cjkTest = visibleLen('\x1b[38;5;111m中文test\x1b[0m');
   if (cjkTest === 8) {
     pass('visibleLen CJK', `'中文test' → 8 columns (correct)`);
@@ -931,16 +952,15 @@ function doctor() {
     fail('visibleLen CJK', `'中文test' → ${cjkTest} columns (expected 8)`);
   }
 
-  // 11. Existing session data summary
+  // 10. Existing session data summary
   try {
-    const files = require('fs').readdirSync(CACHE_DIR);
-    const sessionFiles = files.filter(f => f.startsWith('session-') && f.endsWith('.json'));
+    const files = readdirSync(CACHE_DIR);
     const skillFiles = files.filter(f => f.startsWith('skills-') && f.endsWith('.jsonl'));
     const debugLog = files.includes('debug.jsonl');
-    if (sessionFiles.length > 0 || skillFiles.length > 0) {
-      pass('Cache data', `${sessionFiles.length} session files, ${skillFiles.length} skill files${debugLog ? ', debug log active' : ''}`);
+    if (skillFiles.length > 0) {
+      pass('Cache data', `${skillFiles.length} skill files${debugLog ? ', debug log active' : ''}`);
     } else {
-      warn('Cache data', 'no session/skill files yet (normal on first run)');
+      warn('Cache data', 'no skill files yet (normal on first run)');
     }
   } catch {
     warn('Cache data', 'could not enumerate cache directory');

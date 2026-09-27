@@ -2,7 +2,7 @@
 
 A minimal status bar for [Claude Code](https://claude.ai/code). Zero dependencies, pure Node.js.
 
-Inspired by the official [ccstatusline](https://github.com/anthropics/ccstatusline), with added proxy smoothing, CJK-aware width calculation, and context compaction detection.
+Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with CJK-aware width calculation, cache-hit visualization, and subscription usage limits.
 
 ```
 deepseek-v4-pro · ◆ max · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
@@ -38,10 +38,11 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
 
 ## Features beyond ccstatusline
 
-- **Proxy smoothing** — Some API proxies report per-call token usage instead of cumulative session totals, causing the progress bar to flicker wildly. This statusline persists per-session max values and automatically detects context compaction (resets when usage drops >25 points), keeping the bar stable.
+- **Cache-hit visualization** — the context bar splits cached vs. uncached tokens using shade-character density, with no color seams.
+- **Usage limits** — 5h / weekly subscription limits with reset countdowns and warning colors.
 - **CJK-aware width** — Skill name truncation correctly accounts for double-width CJK characters.
-- **Compaction detection** — After Claude Code performs context compaction, the progress bar resets instead of being stuck at the historical peak.
-- **Path traversal protection** — Session IDs are sanitized before being used in file paths.
+- **Safe by default** — Session IDs are sanitized before being used in file paths; model, branch, and skill names are stripped of terminal control sequences.
+- **Self-cleaning** — Per-session skill files untouched for 7 days are pruned automatically.
 
 ## Requirements
 
@@ -75,11 +76,17 @@ git clone https://github.com/zesming/cclitehud.git ~/cclitehud
 node ~/cclitehud/index.js --preview
 ```
 
-You should see sample output with all effort levels, a progress bar, and a mock skill.
+You should see sample output with all effort levels, progress bars, usage limits, and a mock skill.
 
 #### 3. Configure Claude Code
 
-Add these blocks to `~/.claude/settings.json`:
+The easiest way is to let the script configure itself (merges into existing settings, safe to re-run):
+
+```bash
+node ~/cclitehud/index.js --install
+```
+
+Or add these blocks manually to `~/.claude/settings.json`:
 
 ```json
 {
@@ -122,7 +129,7 @@ The new statusline takes effect on next launch.
 
 ## How skill tracking works
 
-Follows the same pattern as [ccstatusline](https://github.com/anthropics/ccstatusline):
+Follows the same pattern as [ccstatusline](https://github.com/sirmalloc/ccstatusline):
 
 ```
 Skill call or /slash command
@@ -145,7 +152,10 @@ Edit `index.js` — the `CONFIG` and `C` objects at the top:
 
 ```js
 const CONFIG = {
-  barWidth: 32,       // progress bar character width
+  barWidth: 32,       // context bar character width
+  limitBarWidth: 12,  // width of each usage-limit bar (line 3)
+  limitWarnPct: 80,   // usage-limit % turns orange at this level
+  limitCritPct: 95,   // usage-limit % turns red at this level
   maxDirDepth: 2,     // directory path segments to show
 };
 
@@ -157,6 +167,8 @@ const C = {
   skill: 216,         // skill name color
   barFilled: 115,     // progress bar fill color
   barEmpty: 236,      // progress bar empty background
+  pctWarn: 215,       // usage-limit warning color
+  pctCrit: 203,       // usage-limit critical color
 };
 ```
 
@@ -164,14 +176,14 @@ Color codes are ANSI 256-color palette values (0–255).
 
 ## Debug mode
 
-If the progress bar is behaving unexpectedly (e.g., jumping values), you can enable debug logging to capture the raw StatusJSON payloads:
+If the progress bars are behaving unexpectedly (e.g., jumping values, missing usage limits), you can enable debug logging to capture the raw StatusJSON payloads:
 
 1. Edit `~/.claude/settings.json` and add `--debug` to the statusLine command:
    ```json
    "command": "node /Users/YOUR_USER/cclitehud/index.js --debug"
    ```
 2. Use Claude Code normally — raw payloads are appended to `~/.cache/cclitehud/debug.jsonl`
-3. Inspect the log to see what `used_percentage` and `current_usage` values Claude Code is reporting
+3. Inspect the log to see what `context_window` and `rate_limits` values Claude Code is reporting
 
 Remove `--debug` when done.
 
@@ -183,7 +195,7 @@ Run a comprehensive self-diagnostic to verify everything is working correctly:
 node ~/cclitehud/index.js --doctor
 ```
 
-This checks 14 aspects of the installation:
+This checks 13 aspects of the installation:
 
 | Check | What it verifies |
 |-------|-----------------|
@@ -196,11 +208,10 @@ This checks 14 aspects of the installation:
 | PreToolUse Skill hook | Hook configured with correct command |
 | UserPromptSubmit hook | Hook configured with correct command |
 | Skill tracking | Write + read round-trip to JSONL |
-| Session smoothing | Max retention + compaction detection |
 | Render test | Full three-line render with mock data (displayed) |
 | ANSI 256-color | Terminal support detection |
 | CJK visibleLen | Chinese/Japanese/Korean character width calculation |
-| Cache data | Existing session and skill file count |
+| Cache data | Existing skill file count |
 
 Exit code is `0` when all checks pass, `1` if any check fails — useful for scripting.
 
@@ -208,7 +219,7 @@ Exit code is `0` when all checks pass, `1` if any check fails — useful for scr
 
 ```
 cclitehud/
-├── index.js          # Main script (~500 lines, zero dependencies)
+├── index.js          # Main script (single file, zero dependencies)
 ├── package.json      # Metadata
 ├── preview.html      # Browser-based visual preview
 ├── LICENSE           # MIT License
@@ -218,7 +229,7 @@ cclitehud/
 
 ## Acknowledgments
 
-- [ccstatusline](https://github.com/anthropics/ccstatusline) — Official Anthropic statusline implementation
+- [ccstatusline](https://github.com/sirmalloc/ccstatusline) — The statusline that inspired this project
 - [Claude Code](https://claude.ai/code) — The AI coding assistant
 
 ## License

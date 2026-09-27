@@ -33,12 +33,12 @@
 </style></head>
 <body>
 <div class="terminal">
-  <div class="term-title"><div class="dots"><span></span><span></span><span></span></div> cclitehud — v2 (shade-based bar)</div>
+  <div class="term-title"><div class="dots"><span></span><span></span><span></span></div> cclitehud — preview</div>
 
   <!-- Line 1 -->
   <div class="line">
     <span class="model">deepseek-v4-pro</span><span class="sep">·</span>
-    <span class="effort-med">▃&nbsp;medium</span><span class="sep">·</span>
+    <span class="effort-med">◆&nbsp;medium</span><span class="sep">·</span>
     <span class="dir">~/Projects</span><span class="sep">·</span>
     <span class="git">⎇&nbsp;feature/statusline</span><span class="sep">·</span>
     <span class="skill">✦&nbsp;brainstorming</span>
@@ -53,7 +53,7 @@
     <span class="bracket">]</span>
     <span class="bar-pct">45%</span>
     <span class="cache-label">·</span>
-    <span class="cache-val">↖&nbsp;cache&nbsp;60%</span>
+    <span class="cache-val">↖&nbsp;cached&nbsp;60%</span>
   </div>
 
   <!-- Line 3 -->
@@ -62,10 +62,10 @@
     <span class="ctx-label">7d</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░</span><span class="bracket">]</span><span class="bar-pct">61%</span><span class="reset">↻3d5h</span>
   </div>
 
-  <h2>🎯 Fix 1: Model — raw ID, no hardcoded mapping</h2>
+  <h2>Model — raw ID, no hardcoded mapping</h2>
   <div class="line"><span class="model">deepseek-v4-pro</span> <span style="color:#565f89;font-size:12px">← just the raw model string, works for any model</span></div>
 
-  <h2>🎯 Fix 2: Progress bar — shade chars, SINGLE ANSI wrapper</h2>
+  <h2>Progress bar — shade chars, single ANSI wrapper</h2>
   <div class="diagram">
     One <code style="color:#a9b1d6">fg(115)</code> wraps ALL filled chars: <span class="c">▓▓▓▓▓▓▓▓▓</span><span class="u">▒▒▒▒▒</span> → then <code style="color:#a9b1d6">R</code> + <code style="color:#a9b1d6">fg(236)</code> for empty <span class="e">░░░░░░░░░░░░░░░░░░</span>
   </div>
@@ -74,7 +74,7 @@
     Only 1 boundary at used→empty transition (unavoidable: needs different color)
   </div>
 
-  <h2>Character density tiers (same fg color #115)</h2>
+  <h2>Character density tiers (same fg color 115)</h2>
   <div class="effort-row">
     <span class="bar-fill">▓▓▓▓▓▓</span> <span style="color:#565f89;font-size:12px">75% density — cached, brighter</span>
     <span class="bar-fill">▒▒▒▒▒▒</span> <span style="color:#565f89;font-size:12px">50% density — uncached, darker</span>
@@ -85,11 +85,11 @@
 
   <h2>Variants</h2>
   <div class="variant">
-    <div class="variant-label">12% used, 100% cached — 1M window</div>
+    <div class="variant-label">12% used, 90% cached — 1M window</div>
     <div class="line">
       <span class="ctx-label">ctx</span><span class="ctx-size">1M</span><span class="bracket">[</span>
-      <span class="bar-fill">▓▓▓▓</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span class="bracket">]</span>
-      <span class="bar-pct">12%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cache&nbsp;100%</span>
+      <span class="bar-fill">▓▓▓▒</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span class="bracket">]</span>
+      <span class="bar-pct">12%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;90%</span>
     </div>
   </div>
   <div class="variant">
@@ -97,7 +97,7 @@
     <div class="line">
       <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bracket">[</span>
       <span class="bar-fill">▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░</span><span class="bracket">]</span>
-      <span class="bar-pct">85%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cache&nbsp;56%</span>
+      <span class="bar-pct">85%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;56%</span>
     </div>
   </div>
   <div class="variant">
@@ -131,7 +131,7 @@
 
   <hr>
   <div class="note">
-    <strong>CLI:</strong> <code>node ~/Projects/cclitehud/index.js --preview</code> &nbsp;|&nbsp;
+    <strong>CLI:</strong> <code>node ~/cclitehud/index.js --preview</code> &nbsp;|&nbsp;
     <strong>Config:</strong> <code>~/.claude/settings.json</code> → statusLine
   </div>
 </div>
