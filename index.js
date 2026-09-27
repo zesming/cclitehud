@@ -2,10 +2,11 @@
 'use strict';
 
 /**
- * cclitehud — A lightweight two-line Claude Code statusline.
+ * cclitehud — A lightweight Claude Code statusline.
  *
  * Line 1   Model · Effort · Directory · Git branch · Recent skill
  * Line 2   Context window progress bar with cache-breakdown + percentages
+ * Line 3   Usage limits (5h / 7d) — only for subscription logins
  *
  * Reads StatusJSON from stdin (piped by Claude Code).
  * Run with --preview to see a sample rendering.
@@ -19,6 +20,9 @@ const os = require('os');
 // ─── Configuration ───────────────────────────────────────────────────────────
 const CONFIG = {
   barWidth: 32,
+  limitBarWidth: 12, // two limit bars → line 3 as wide as line 2
+  limitWarnPct: 80,
+  limitCritPct: 95,
   maxDirDepth: 2, // how many trailing path segments to show
 };
 
@@ -38,6 +42,8 @@ const C = {
   barEmpty: 236, // dark gray for pixel-dot background
   barBracket: 243, // brackets around bar
   barPct: 250, // percentage text
+  pctWarn: 215, // soft orange — limit ≥ warn threshold
+  pctCrit: 203, // soft red — limit ≥ crit threshold
 };
 
 // ─── ANSI helpers ────────────────────────────────────────────────────────────
@@ -472,6 +478,52 @@ function renderLine2(data) {
   return '\x1b[0m' + line.replace(/ /g, NBSP);
 }
 
+// Usage limits — StatusJSON: { rate_limits: { five_hour, seven_day } }, each
+// { used_percentage, resets_at (unix seconds) }. Present only for Claude.ai
+// subscription logins, after the first API response.
+function formatCountdown(resetsAt, nowMs) {
+  const secs = Number(resetsAt) - nowMs / 1000;
+  if (!Number.isFinite(secs) || secs <= 0) return '';
+  const mins = Math.ceil(secs / 60);
+  const d = Math.floor(mins / 1440);
+  const h = Math.floor((mins % 1440) / 60);
+  const m = mins % 60;
+  if (d > 0) return d + 'd' + (h > 0 ? h + 'h' : '');
+  if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '');
+  return m + 'm';
+}
+
+function limitPctColor(pct) {
+  if (pct >= CONFIG.limitCritPct) return C.pctCrit;
+  if (pct >= CONFIG.limitWarnPct) return C.pctWarn;
+  return C.barPct;
+}
+
+function renderLimit(label, win, nowMs) {
+  if (!win || typeof win.used_percentage !== 'number' || !Number.isFinite(win.used_percentage)) {
+    return null;
+  }
+  const pct = Math.max(0, Math.min(100, win.used_percentage));
+  let s = fg(C.label) + label + NBSP + R;
+  s += fg(C.barBracket) + '[' + R + renderBar(pct, 0, CONFIG.limitBarWidth) + fg(C.barBracket) + ']' + R;
+  s += NBSP + fg(limitPctColor(pct)) + B + pct.toFixed(0) + '%' + R;
+  const countdown = formatCountdown(win.resets_at, nowMs);
+  if (countdown) s += NBSP + fg(C.separator) + '↻' + countdown + R;
+  return s;
+}
+
+function renderLine3(data, nowMs) {
+  const rl = data && data.rate_limits;
+  if (!rl || typeof rl !== 'object') return null;
+  const now = nowMs || Date.now();
+  const parts = [
+    renderLimit('5h', rl.five_hour, now),
+    renderLimit('7d', rl.seven_day, now),
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return '\x1b[0m' + parts.join(dimDot()).replace(/ /g, NBSP);
+}
+
 // ─── Preview mode ────────────────────────────────────────────────────────────
 function preview() {
   const sample = {
@@ -525,9 +577,29 @@ function preview() {
     console.log('  ' + renderLine1(baseData));
   }
 
-  // ── Line 2 — main sample (45% used, 60% cached-of-used) ──
+  // ── Line 2 + 3 — main sample (45% used, 60% cached-of-used) ──
+  const nowSec = Date.now() / 1000;
+  sample.rate_limits = {
+    five_hour: { used_percentage: 23, resets_at: nowSec + 2 * 3600 + 14 * 60 },
+    seven_day: { used_percentage: 61, resets_at: nowSec + 3 * 86400 + 5 * 3600 },
+  };
   console.log('');
   console.log('  ' + renderLine2(sample));
+  console.log('  ' + renderLine3(sample));
+  console.log('');
+
+  // ── Line 3 variants ──
+  console.log('  Usage limit variants:');
+  const limitVariants = [
+    { label: 'Warning (≥80%) and critical (≥95%)', five: 84, seven: 97 },
+    { label: 'Only 5h window reported', five: 42, seven: null },
+  ];
+  for (const v of limitVariants) {
+    const rl = { five_hour: { used_percentage: v.five, resets_at: nowSec + 38 * 60 } };
+    if (v.seven !== null) rl.seven_day = { used_percentage: v.seven, resets_at: nowSec + 20 * 3600 };
+    console.log('    ' + v.label);
+    console.log('    ' + renderLine3({ rate_limits: rl }));
+  }
   console.log('');
 
   // ── Line 2 variants ──
@@ -823,11 +895,17 @@ function doctor() {
     };
     const line1 = renderLine1(mockData);
     const line2 = renderLine2(mockData);
-    if (line1.length > 0 && line2.length > 0) {
-      pass('Render test', 'both lines generated');
+    mockData.rate_limits = {
+      five_hour: { used_percentage: 30, resets_at: Date.now() / 1000 + 3600 },
+      seven_day: { used_percentage: 50, resets_at: Date.now() / 1000 + 86400 },
+    };
+    const line3 = renderLine3(mockData);
+    if (line1.length > 0 && line2.length > 0 && line3) {
+      pass('Render test', 'all three lines generated');
       console.log('');
       console.log('  ' + line1);
       console.log('  ' + line2);
+      console.log('  ' + line3);
       console.log('');
     } else {
       fail('Render test', 'empty output');
@@ -942,6 +1020,7 @@ function main() {
         context_window: data.context_window,
         effort: data.effort,
         status: data.status,
+        rate_limits: data.rate_limits,
         // derived values for quick diagnosis
         _usedPct_isNumber: typeof (data.context_window && data.context_window.used_percentage) === 'number',
         _usedPct_value: data.context_window && data.context_window.used_percentage,
@@ -954,6 +1033,8 @@ function main() {
   // Render and output
   process.stdout.write(renderLine1(data) + '\n');
   process.stdout.write(renderLine2(data) + '\n');
+  const line3 = renderLine3(data);
+  if (line3) process.stdout.write(line3 + '\n');
 }
 
 main();

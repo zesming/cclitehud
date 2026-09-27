@@ -1,7 +1,7 @@
 {
   "name": "cclitehud",
   "version": "1.0.0",
-  "description": "A custom two-line Claude Code statusline with context window progress bar",
+  "description": "A custom Claude Code statusline with context window and usage limit progress bars",
   "main": "index.js",
   "bin": {
     "cclitehud": "./index.js"

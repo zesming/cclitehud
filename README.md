@@ -1,12 +1,13 @@
 # cclitehud
 
-A minimal two-line status bar for [Claude Code](https://claude.ai/code). Zero dependencies, pure Node.js.
+A minimal status bar for [Claude Code](https://claude.ai/code). Zero dependencies, pure Node.js.
 
 Inspired by the official [ccstatusline](https://github.com/anthropics/ccstatusline), with added proxy smoothing, CJK-aware width calculation, and context compaction detection.
 
 ```
 deepseek-v4-pro · ◆ max · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
 ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░░░░░░░░░] 45% · ↖ cached 60%
+5h [▒▒▒░░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒▒░░░░░] 61% ↻3d5h
 ```
 
 > Run `node index.js --preview` to see all effort levels and usage variants.
@@ -28,6 +29,12 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
   - `░` (25% density) = empty space
 - **Usage %** — total context window usage
 - **Cached %** — cache hit rate (cache_read ÷ actual_context × 100)
+
+**Line 3** — Usage limits (Claude.ai subscription logins only)
+- **5h / 7d** — rolling 5-hour and weekly limit usage, each with a compact progress bar
+- **Reset countdown** — `↻` time until the window resets (`38m`, `2h14m`, `3d5h`)
+- **Threshold colors** — percentage turns orange at ≥80% and red at ≥95%
+- Hidden entirely when `rate_limits` is absent (API key / third-party proxy, or before the first API response); a window without data is omitted
 
 ## Features beyond ccstatusline
 
@@ -190,7 +197,7 @@ This checks 14 aspects of the installation:
 | UserPromptSubmit hook | Hook configured with correct command |
 | Skill tracking | Write + read round-trip to JSONL |
 | Session smoothing | Max retention + compaction detection |
-| Render test | Full two-line render with mock data (displayed) |
+| Render test | Full three-line render with mock data (displayed) |
 | ANSI 256-color | Terminal support detection |
 | CJK visibleLen | Chinese/Japanese/Korean character width calculation |
 | Cache data | Existing session and skill file count |
