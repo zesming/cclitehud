@@ -1,0 +1,7 @@
+{
+  "name": "cclitehud",
+  "version": "0.1.0",
+  "description": "cclitehud bars (dir, branch, skill, context, usage limits) above the prompt in the Claude desktop Code tab",
+  "author": { "name": "zesming" },
+  "types": "./types/index.d.ts"
+}

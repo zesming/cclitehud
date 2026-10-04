@@ -12,6 +12,8 @@ ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░
 
 > Run `node index.js --preview` to see all effort levels and usage variants.
 
+In the Claude desktop app's Code tab, an optional [desktop plugin](#desktop-app-code-tab) draws the same bars above the prompt.
+
 ## What it shows
 
 **Line 1** — Session context
@@ -127,6 +129,47 @@ Or add these blocks manually to `~/.claude/settings.json`:
 
 The new statusline takes effect on next launch.
 
+## Desktop app (Code tab)
+
+The terminal statusline above stays as it is. For the Claude desktop app's Code tab, `desktop-plugin/` is a Claude Code plugin that draws a compact two-row band above the prompt:
+
+```
+~/Projects/cclitehud · ⎇ main · ✦ brainstorming
+ctx 1M [▓▓▒░░░░░░░] 23% · ↖ cached 60% · 5h [▒▒░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒░░░░] 61% ↻3d5h
+```
+
+- **Row 1** — directory, git branch, recent skill / slash command
+- **Row 2** — context, 5h and 7d bars, all the same width (10)
+- **Model and effort are omitted** — the desktop already shows them below the prompt
+- **Terminal untouched** — the plugin draws only on the desktop surface, so a CLI session keeps the original three-line statusline and shows no duplicate
+
+It reads everything from the session directly (no `index.js`, no hooks in `settings.json`). Colors are mid-tone hex values readable in both light and dark themes.
+
+### Install
+
+Point `CLAUDE_CODE_PLUGIN_DIRS` at the folder in the `env` block of `~/.claude/settings.json` (merge with any existing `env` keys):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/cclitehud/desktop-plugin"
+  }
+}
+```
+
+Then restart the desktop app. To try it in a single session instead, run `claude --plugin-dir ~/cclitehud/desktop-plugin`.
+
+Check the plugin with:
+
+```bash
+claude plugin validate ~/cclitehud/desktop-plugin
+```
+
+### Differences from the terminal statusline
+
+- **Cache hit rate** is computed from the whole last turn's token totals (all requests in the turn), not only the last request, so it can differ slightly.
+- **Bar widths and colors** live in `CONFIG` and `C` at the top of `desktop-plugin/hooks/register.tsx`.
+
 ## How skill tracking works
 
 Follows the same pattern as [ccstatusline](https://github.com/sirmalloc/ccstatusline):
@@ -222,6 +265,11 @@ cclitehud/
 ├── index.js          # Main script (single file, zero dependencies)
 ├── package.json      # Metadata
 ├── preview.html      # Browser-based visual preview
+├── desktop-plugin/   # Claude Code plugin for the desktop Code tab
+│   ├── .claude-plugin/plugin.json
+│   ├── hooks/hooks.json
+│   ├── hooks/register.tsx   # The band (rendering + data)
+│   └── types/index.d.ts     # Plugin state contract
 ├── LICENSE           # MIT License
 ├── .gitignore
 └── README.md         # This file
