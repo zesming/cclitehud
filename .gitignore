@@ -3,3 +3,4 @@ node_modules/
 ._*
 *.log
 .cache/
+desktop-plugin/tsconfig.json

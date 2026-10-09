@@ -35,7 +35,7 @@ In the Claude desktop app's Code tab, an optional [desktop plugin](#desktop-app-
 **Line 3** — Usage limits (Claude.ai subscription logins only)
 - **5h / 7d** — rolling 5-hour and weekly limit usage, each with a compact progress bar
 - **Reset countdown** — `↻` time until the window resets (`38m`, `2h14m`, `3d5h`)
-- **Threshold colors** — percentage turns orange at ≥80% and red at ≥95%
+- **Threshold colors** — percentage turns yellow at ≥70% and red at ≥90%
 - Hidden entirely when `rate_limits` is absent (API key / third-party proxy, or before the first API response); a window without data is omitted
 
 ## Features beyond ccstatusline
@@ -134,12 +134,14 @@ The new statusline takes effect on next launch.
 The terminal statusline above stays as it is. For the Claude desktop app's Code tab, `desktop-plugin/` is a Claude Code plugin that draws a compact two-row band above the prompt:
 
 ```
-~/Projects/cclitehud · ⎇ main · ✦ brainstorming
-ctx 1M [▓▓▒░░░░░░░] 23% · ↖ cached 60% · 5h [▒▒░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒░░░░] 61% ↻3d5h
+Projects/cclitehud · ⧉ fix-login · ⎇ fix-login · ✦ brainstorming
+ctx 1M [▓▓▒░░░░░│░] 23% · ↖ cached 60% · 5h [▒▒░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒▒▒░░] 78% ↻3d5h
 ```
 
-- **Row 1** — directory, git branch, recent skill / slash command
+- **Row 1** — directory, git branch, recent skill / slash command. Inside a git worktree, the main project's path comes first, then `⧉` and the worktree's name.
 - **Row 2** — context, 5h and 7d bars, all the same width (10)
+- **Auto-compact mark** — a faint `│` in the context bar where auto-compaction kicks in (hidden when auto-compact is off)
+- **Bar colors** — the same thresholds as the terminal's usage-limit percentages (`limitWarnPct` 70, `limitCritPct` 90): a bar and its percentage turn yellow at ≥70% and red at ≥90%. For the context bar the percentage is measured against the auto-compact point (against the full window when auto-compact is off), so it warns before compaction.
 - **Model and effort are omitted** — the desktop already shows them below the prompt
 - **Terminal untouched** — the plugin draws only on the desktop surface, so a CLI session keeps the original three-line statusline and shows no duplicate
 
@@ -164,6 +166,12 @@ Check the plugin with:
 ```bash
 claude plugin validate ~/cclitehud/desktop-plugin
 ```
+
+```bash
+claude plugin test ~/cclitehud/desktop-plugin
+```
+
+Edits take effect in sessions started after the change.
 
 ### Differences from the terminal statusline
 
@@ -197,8 +205,8 @@ Edit `index.js` — the `CONFIG` and `C` objects at the top:
 const CONFIG = {
   barWidth: 32,       // context bar character width
   limitBarWidth: 12,  // width of each usage-limit bar (line 3)
-  limitWarnPct: 80,   // usage-limit % turns orange at this level
-  limitCritPct: 95,   // usage-limit % turns red at this level
+  limitWarnPct: 70,   // usage-limit % turns yellow at this level
+  limitCritPct: 90,   // usage-limit % turns red at this level
   maxDirDepth: 2,     // directory path segments to show
 };
 
@@ -210,7 +218,7 @@ const C = {
   skill: 216,         // skill name color
   barFilled: 115,     // progress bar fill color
   barEmpty: 236,      // progress bar empty background
-  pctWarn: 215,       // usage-limit warning color
+  pctWarn: 221,       // usage-limit warning color
   pctCrit: 203,       // usage-limit critical color
 };
 ```
@@ -269,6 +277,7 @@ cclitehud/
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json
 │   ├── hooks/register.tsx   # The band (rendering + data)
+│   ├── tests/band.test.tsx  # `claude plugin test desktop-plugin`
 │   └── types/index.d.ts     # Plugin state contract
 ├── LICENSE           # MIT License
 ├── .gitignore

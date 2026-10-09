@@ -24,8 +24,8 @@ const os = require('os');
 const CONFIG = {
   barWidth: 32,
   limitBarWidth: 12, // two limit bars → line 3 as wide as line 2
-  limitWarnPct: 80,
-  limitCritPct: 95,
+  limitWarnPct: 70,
+  limitCritPct: 90,
   maxDirDepth: 2, // how many trailing path segments to show
 };
 
@@ -45,7 +45,7 @@ const C = {
   barEmpty: 236, // dark gray for pixel-dot background
   barBracket: 243, // brackets around bar
   barPct: 250, // percentage text
-  pctWarn: 215, // soft orange — limit ≥ warn threshold
+  pctWarn: 221, // soft yellow — limit ≥ warn threshold
   pctCrit: 203, // soft red — limit ≥ crit threshold
 };
 
@@ -621,7 +621,7 @@ function preview() {
   // ── Line 3 variants ──
   console.log('  Usage limit variants:');
   const limitVariants = [
-    { label: 'Warning (≥80%) and critical (≥95%)', five: 84, seven: 97 },
+    { label: 'Warning (≥70%) and critical (≥90%)', five: 78, seven: 94 },
     { label: 'Only 5h window reported', five: 42, seven: null },
   ];
   for (const v of limitVariants) {

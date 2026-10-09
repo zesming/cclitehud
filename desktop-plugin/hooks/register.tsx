@@ -2,10 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 // cclitehud for the desktop Code tab: two rows above the prompt, dir,
-// branch and skill on the first, the context and usage-limit bars on the
-// second. Model and effort are left out
-// because the desktop already shows them. The terminal keeps its real
-// statusLine, so this band only draws on non-terminal surfaces.
+// worktree, branch and skill on the first, the context and usage-limit bars
+// on the second. Model and effort are left out because the desktop already
+// shows them. The terminal keeps its real statusLine, so this band only
+// draws on non-terminal surfaces.
 
 const skill = atom({ plugin: 'cclitehud', key: 'skill' } as const, null)
 const cachePct = atom({ plugin: 'cclitehud', key: 'cachePct' } as const, null)
@@ -14,8 +14,8 @@ const tick = atom({ plugin: 'cclitehud', key: 'tick' } as const, 0)
 const CONFIG = {
   barWidth: 10,
   limitBarWidth: 10,
-  limitWarnPct: 80,
-  limitCritPct: 95,
+  limitWarnPct: 70,
+  limitCritPct: 90,
   maxDirDepth: 2,
 }
 
@@ -24,34 +24,60 @@ const CONFIG = {
 const C = {
   dir: '#5f87d7',
   git: '#9b72cf',
+  worktree: '#4fa3a3',
   skill: '#d98a5f',
   separator: '#8a8a8a',
   label: '#8a8a8a',
   barFilled: '#3fa58a',
-  barPct: undefined as string | undefined,
-  pctWarn: '#e08a3c',
+  pctWarn: '#c9a227',
   pctCrit: '#d9534f',
 }
 
 const FILL_CACHED = '▓'
 const FILL_UNCACHED = '▒'
 const FILL_EMPTY = '░'
+const COMPACT_MARK = '│'
+const WORKTREE_ICON = '⧉'
 
 const GIT_TTL = 5000
-const gitCache = { dir: '', branch: null as string | null, ts: 0 }
+type GitInfo = { branch: string | null; mainRoot: string | null; worktree: string | null }
+const gitCache = { dir: '', info: null as GitInfo | null, ts: 0 }
+
+// Auto-compact threshold in tokens; re-read when the window changes or the
+// session is measured again (a turn ended, /autocompact may have moved it)
+const compactCache = { window: 0, threshold: null as number | null }
 
 function clamp(n: number) {
   return Math.max(0, Math.min(100, n))
 }
 
-function bar(usedPct: number, cachedOfUsed: number, width: number) {
+function pctColor(pct: number) {
+  if (pct >= CONFIG.limitCritPct) return C.pctCrit
+  if (pct >= CONFIG.limitWarnPct) return C.pctWarn
+  return C.barFilled
+}
+
+type Cell = 'cached' | 'uncached' | 'empty' | 'mark'
+
+// One character per cell; `markAt` (a cell index) is overwritten with the
+// auto-compact mark so every bar keeps the same width.
+function barCells(usedPct: number, cachedOfUsed: number, width: number, markAt: number | null) {
   const used = clamp(usedPct)
   const total = Math.round((used / 100) * width)
   const cached = Math.min(total, Math.round(((clamp(cachedOfUsed) / 100) * used / 100) * width))
-  return {
-    filled: FILL_CACHED.repeat(cached) + FILL_UNCACHED.repeat(Math.max(0, total - cached)),
-    empty: FILL_EMPTY.repeat(Math.max(0, width - total)),
+  const cells: Cell[] = []
+  for (let i = 0; i < width; i++) {
+    cells.push(i < cached ? 'cached' : i < total ? 'uncached' : 'empty')
   }
+  if (markAt !== null && markAt >= 0 && markAt < width) cells[markAt] = 'mark'
+  return cells
+}
+
+const CELL_CHAR: Record<Cell, string> = {
+  cached: FILL_CACHED,
+  uncached: FILL_UNCACHED,
+  empty: FILL_EMPTY,
+  mark: COMPACT_MARK,
 }
 
 function formatSize(n: number) {
@@ -83,29 +109,62 @@ function shortPath(full: string, home: string | null) {
 
 function homeOf(cwd: string) {
   const m = /^(\/Users\/[^/]+|\/home\/[^/]+)/.exec(cwd)
-  return m ? m[1] : null
+  return m?.[1] ?? null
 }
 
-async function gitBranch($: EngineInterface, cwd: string) {
+function dirname(p: string) {
+  const i = p.replace(/\/+$/, '').lastIndexOf('/')
+  return i <= 0 ? '/' : p.slice(0, i)
+}
+
+function basename(p: string) {
+  return p.replace(/\/+$/, '').split('/').pop() || p
+}
+
+// Branch, plus the main working tree and the linked worktree when the
+// session runs inside one (its top level differs from the main tree).
+async function gitInfo($: EngineInterface, cwd: string): Promise<GitInfo | null> {
   const now = await $.clock.now()
-  if (gitCache.dir === cwd && now - gitCache.ts < GIT_TTL) return gitCache.branch
-  let branch: string | null = null
+  if (gitCache.dir === cwd && now - gitCache.ts < GIT_TTL) return gitCache.info
+  let info: GitInfo | null = null
   try {
-    const r = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 2000 })
+    const r = await $.process.run(
+      ['git', 'rev-parse', '--abbrev-ref', 'HEAD', '--path-format=absolute', '--show-toplevel', '--git-common-dir'],
+      { cwd, timeoutMs: 2000 },
+    )
     if (r.exitCode === 0) {
-      branch = r.stdout.trim() || null
+      const [head = '', top = '', common = ''] = r.stdout.trim().split('\n').map(l => l.trim())
+      let branch: string | null = head || null
       if (branch === 'HEAD') {
         const s = await $.process.run(['git', 'rev-parse', '--short', 'HEAD'], { cwd, timeoutMs: 2000 })
         branch = s.exitCode === 0 ? s.stdout.trim() : null
       }
+      const mainRoot = basename(common) === '.git' ? dirname(common) : null
+      const worktree = mainRoot && top && top !== mainRoot ? top : null
+      info = { branch, mainRoot, worktree }
     }
   } catch {
-    branch = null
+    info = null
   }
   gitCache.dir = cwd
-  gitCache.branch = branch
+  gitCache.info = info
   gitCache.ts = now
-  return branch
+  return info
+}
+
+async function compactThreshold($: EngineInterface, window: number) {
+  if (compactCache.window === window) return compactCache.threshold
+  let threshold: number | null = null
+  try {
+    const u = await $.session.usage({ breakdown: 'summary' })
+    const b = u.context.breakdown
+    threshold = b && b.isAutoCompactEnabled && b.autoCompactThreshold ? b.autoCompactThreshold : null
+  } catch {
+    threshold = null
+  }
+  compactCache.window = window
+  compactCache.threshold = threshold
+  return threshold
 }
 
 export const register: Register = on => {
@@ -128,11 +187,13 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const m = /^\/([a-zA-Z0-9_:-]+)(?:\s|$)/.exec(e.text)
-    if (m) await update($, skill, () => m[1])
+    // Never hold up the prompt over a display-only value
+    if (m) await update($, skill, () => m[1]).catch(() => undefined)
     return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
+    compactCache.window = 0
     await update($, tick, n => n + 1)
     return next(e)
   })
@@ -147,7 +208,10 @@ export const register: Register = on => {
       read($, skill),
       read($, cachePct),
     ])
-    const branch = await gitBranch($, cwd)
+    const git = await gitInfo($, cwd)
+    const branch = git?.branch ?? null
+    const ctx = usage.context
+    const threshold = await compactThreshold($, ctx.window)
     const now = await $.clock.now()
 
     const { Box, Text } = $.ui.resolve(e)
@@ -157,12 +221,57 @@ export const register: Register = on => {
       </Text>
     )
 
-    // dir · branch · skill
-    const line1 = [
-      <Text key="dir" color={C.dir}>
-        {shortPath(cwd, homeOf(cwd))}
-      </Text>,
-    ]
+    // A bar as runs of same-kind cells, so the mark can be dimmed apart
+    const renderBar = (k: string, cells: Cell[], fill: string) => {
+      const runs: { kind: Cell; text: string }[] = []
+      for (const c of cells) {
+        const last = runs[runs.length - 1]
+        if (last && last.kind === c) last.text += CELL_CHAR[c]
+        else runs.push({ kind: c, text: CELL_CHAR[c] })
+      }
+      return [
+        <Text key={k + 'lb'} color={C.separator}>
+          [
+        </Text>,
+        ...runs.map((r, i) =>
+          r.kind === 'empty' ? (
+            <Text key={k + i} dimColor>
+              {r.text}
+            </Text>
+          ) : r.kind === 'mark' ? (
+            <Text key={k + i} color={C.separator} dimColor>
+              {r.text}
+            </Text>
+          ) : (
+            <Text key={k + i} color={fill}>
+              {r.text}
+            </Text>
+          ),
+        ),
+        <Text key={k + 'rb'} color={C.separator}>
+          ]
+        </Text>,
+      ]
+    }
+
+    // [main project · ⧉ worktree | dir] · branch · skill
+    const mainRoot = git?.mainRoot ?? null
+    const worktree = git?.worktree ?? null
+    const line1 = mainRoot && worktree
+      ? [
+          <Text key="dir" color={C.dir}>
+            {shortPath(mainRoot, homeOf(mainRoot))}
+          </Text>,
+          dot('dw'),
+          <Text key="wt" color={C.worktree}>
+            {WORKTREE_ICON + ' ' + basename(worktree)}
+          </Text>,
+        ]
+      : [
+          <Text key="dir" color={C.dir}>
+            {shortPath(cwd, homeOf(cwd))}
+          </Text>,
+        ]
     if (branch) {
       line1.push(
         dot('d3'),
@@ -180,27 +289,19 @@ export const register: Register = on => {
       )
     }
 
-    // ctx bar with cache split
-    const ctx = usage.context
+    // ctx bar with cache split and the auto-compact mark; its color tracks
+    // how close the context is to auto-compaction (or to the window when
+    // auto-compact is off)
     const used = ctx.percent ?? 0
-    const b = bar(used, cached ?? 0, CONFIG.barWidth)
+    const markAt = threshold ? Math.min(CONFIG.barWidth - 1, Math.floor((threshold / ctx.window) * CONFIG.barWidth)) : null
+    const nearPct = threshold && ctx.tokens !== undefined ? (ctx.tokens / threshold) * 100 : used
+    const ctxColor = pctColor(nearPct)
     const line2 = [
       <Text key="label" color={C.label}>
         {'ctx ' + formatSize(ctx.window) + ' '}
       </Text>,
-      <Text key="lb" color={C.separator}>
-        [
-      </Text>,
-      <Text key="filled" color={C.barFilled}>
-        {b.filled}
-      </Text>,
-      <Text key="empty" dimColor>
-        {b.empty}
-      </Text>,
-      <Text key="rb" color={C.separator}>
-        ]
-      </Text>,
-      <Text key="pct" bold>
+      ...renderBar('ctx', barCells(used, cached ?? 0, CONFIG.barWidth, markAt), ctxColor),
+      <Text key="pct" bold color={ctxColor === C.barFilled ? undefined : ctxColor}>
         {' ' + used.toFixed(0) + '%'}
       </Text>,
     ]
@@ -219,26 +320,14 @@ export const register: Register = on => {
       .filter(w => labels[w.kind])
       .flatMap((w, i) => {
         const pct = clamp(w.percentUsed)
-        const lb = bar(pct, 0, CONFIG.limitBarWidth)
-        const color = pct >= CONFIG.limitCritPct ? C.pctCrit : pct >= CONFIG.limitWarnPct ? C.pctWarn : undefined
+        const fill = pctColor(pct)
         const cd = countdown(w.resetsAt, now)
         const parts = [
           <Text key={w.kind + 'l'} color={C.label}>
             {labels[w.kind] + ' '}
           </Text>,
-          <Text key={w.kind + 'lb'} color={C.separator}>
-            [
-          </Text>,
-          <Text key={w.kind + 'f'} color={C.barFilled}>
-            {lb.filled}
-          </Text>,
-          <Text key={w.kind + 'e'} dimColor>
-            {lb.empty}
-          </Text>,
-          <Text key={w.kind + 'rb'} color={C.separator}>
-            ]
-          </Text>,
-          <Text key={w.kind + 'p'} bold color={color}>
+          ...renderBar(w.kind, barCells(pct, 0, CONFIG.limitBarWidth, null), fill),
+          <Text key={w.kind + 'p'} bold color={fill === C.barFilled ? undefined : fill}>
             {' ' + pct.toFixed(0) + '%'}
           </Text>,
         ]
