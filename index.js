@@ -2,53 +2,35 @@
 'use strict';
 
 /**
- * cclitehud — A lightweight Claude Code statusline.
+ * cclitehud — A lightweight Claude Code HUD, in two parts:
  *
- * Line 1   Model · Effort · Directory · Git branch · Recent skill
- * Line 2   Context window progress bar with cache-breakdown + percentages
- * Line 3   Usage limits (5h / 7d) + API-equivalent cost of the current 7d window
- *          — only for subscription logins
+ *   plugin/           A Claude Code plugin drawing two rows above the prompt,
+ *                     in the terminal and the desktop Code tab alike:
+ *                     directory · worktree · branch · skill, then the context
+ *                     and usage-limit bars and the weekly API-equivalent cost.
+ *   index.js          The terminal statusLine: model · thinking effort. The
+ *                     plugin sees effort only on a running turn's steps, not
+ *                     the session's setting; the desktop shows both itself.
+ *                     Also computes the weekly cost for the plugin
+ *                     (--refresh-cost) and sets both parts up (--install).
  *
  * Reads StatusJSON from stdin (piped by Claude Code).
  * Run with --preview to see a sample rendering.
  */
 
-const { execSync, spawn } = require('child_process');
 const {
   readFileSync, mkdirSync, writeFileSync, appendFileSync,
-  existsSync, readdirSync, statSync, unlinkSync, renameSync,
+  existsSync, readdirSync, statSync, unlinkSync, renameSync, realpathSync, chmodSync,
 } = require('fs');
 const path = require('path');
 const os = require('os');
 
-// ─── Configuration ───────────────────────────────────────────────────────────
-const CONFIG = {
-  barWidth: 32,
-  limitBarWidth: 12, // two limit bars → line 3 about as wide as line 2
-  limitWarnPct: 70,
-  limitCritPct: 90,
-  maxDirDepth: 2, // how many trailing path segments to show
-};
-
 // ─── 256-color palette (muted, modern, not garish) ──────────────────────────
 const C = {
-  // Semantic
   model: 117, // soft sky blue
   effort: { low: 151, medium: 222, high: 215, xhigh: 210, ultra: 203, max: 209 },
   effDefault: 248,
-  dir: 111, // soft periwinkle blue
-  git: 183, // soft lavender
-  skill: 216, // soft peach
   separator: 243, // muted gray
-  label: 248, // light gray
-  // Progress bar
-  barFilled: 115, // bar fill — cached part of the ctx bar
-  barUncached: 66, // dimmer teal — uncached part of the ctx bar
-  barTrack: 239, // thin track behind the filled part
-  barPct: 250, // percentage text
-  pctWarn: 221, // soft yellow — limit ≥ warn threshold (bar + %)
-  pctCrit: 203, // soft red — limit ≥ crit threshold (bar + %)
-  cost: 180, // soft tan — weekly API-equivalent cost
 };
 
 // ─── ANSI helpers ────────────────────────────────────────────────────────────
@@ -57,53 +39,9 @@ const R = '\x1b[0m';
 const B = '\x1b[1m';
 const D = '\x1b[2m';
 
-// Strip ANSI escape sequences and measure terminal display width.
-// Accounts for CJK and wide characters that occupy 2 terminal columns.
-function visibleLen(str) {
-  const stripped = str.replace(/\x1b\[[0-9;]*m/g, '');
-  let width = 0;
-  for (const ch of stripped) {
-    const code = ch.codePointAt(0);
-    // CJK Unified Ideographs, CJK Compatibility, Fullwidth Forms, etc.
-    if (
-      (code >= 0x1100 && code <= 0x115f) ||   // Hangul Jamo
-      (code >= 0x2e80 && code <= 0x9fff) ||   // CJK Radicals .. CJK Unified
-      (code >= 0xac00 && code <= 0xd7a3) ||   // Hangul Syllables
-      (code >= 0xf900 && code <= 0xfaff) ||   // CJK Compatibility Ideographs
-      (code >= 0xfe10 && code <= 0xfe19) ||   // Vertical Forms
-      (code >= 0xfe30 && code <= 0xfe6f) ||   // CJK Compatibility Forms
-      (code >= 0xff00 && code <= 0xff60) ||   // Fullwidth Forms
-      (code >= 0xffe0 && code <= 0xffe6) ||   // Fullwidth Sign Variants
-      (code >= 0x20000 && code <= 0x2ffff) || // CJK Unified Ideographs Ext B+
-      (code >= 0x30000 && code <= 0x3ffff)    // CJK Unified Ideographs Ext G+
-    ) {
-      width += 2;
-    } else if (code >= 0x20) {
-      width += 1;
-    }
-    // control characters and zero-width: +0
-  }
-  return width;
-}
-
-// Truncate a plain (non-ANSI) string to fit maxWidth display columns, adding
-// an ellipsis when cut. CJK characters count as 2 columns.
-function truncateToWidth(str, maxWidth) {
-  if (visibleLen(str) <= maxWidth) return str;
-  if (maxWidth < 2) return '';
-  let out = '';
-  let width = 0;
-  for (const ch of str) {
-    const w = visibleLen(ch);
-    if (width + w > maxWidth - 1) break;
-    out += ch;
-    width += w;
-  }
-  return out + '…';
-}
-
 // Non-breaking space — prevents VSCode trimming
-const NBSP = ' ';
+const NBSP = ' ';
+const SEP = '·'; // middle dot separator
 
 // Safe numeric coercion — prevents string concatenation bugs (e.g. "500"+"1000" → "5001000")
 function num(v) {
@@ -111,46 +49,21 @@ function num(v) {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-// ─── Glyphs ──────────────────────────────────────────────────────────────────
-// Thin line glyphs for all bars: shade blocks (▓▒░) fill the whole cell in
-// many fonts, which made stacked bars on lines 2 and 3 visually merge.
-const BAR_FILL  = '━'; // heavy line — used
-const BAR_TRACK = '─'; // light line — remaining
-const SEP = '·'; // middle dot separator
-const LOCAL_ICON = '⌂'; // marks the cost as computed from local transcripts
+const CACHE_DIR = path.join(os.homedir(), '.cache', 'cclitehud');
+// Claude Code's own config folder: settings.json and the transcripts
+const CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const PLUGIN_DIR = path.join(__dirname, 'plugin');
+const OLD_PLUGIN_DIR = path.join(__dirname, 'desktop-plugin'); // name before 2026-10
 
-// Context window sizes by model family (default 200k)
-const MODEL_CONTEXT = {
-  'claude-opus-4-8': 200000,
-  'claude-opus-4-7': 200000,
-  'claude-opus-4-6': 200000,
-  'claude-sonnet-4-6': 200000,
-  'claude-sonnet-4-5': 200000,
-  'claude-haiku-4-5': 200000,
-  'deepseek-v4-pro': 1000000,
-  'deepseek-v4-pro[1M]': 1000000,
-};
-
-function getModelId(raw) {
-  if (!raw) return '';
-  return typeof raw === 'string' ? raw.trim() : (raw.id || raw.display_name || '').trim();
-}
-
-function getContextSize(modelId) {
-  // Check exact match first
-  if (MODEL_CONTEXT[modelId]) return MODEL_CONTEXT[modelId];
-  // Parse [1M] / [200K] suffix from model string (must come before fuzzy includes)
-  const m = /\[(\d+(?:\.\d+)?)\s*([mMkK])\]/.exec(modelId);
-  if (m) {
-    const val = parseFloat(m[1]);
-    const unit = m[2].toLowerCase();
-    return Math.round(val * (unit === 'm' ? 1_000_000 : 1_000));
-  }
-  // Check if modelId contains a known key (fuzzy fallback)
-  for (const [key, size] of Object.entries(MODEL_CONTEXT)) {
-    if (modelId.includes(key)) return size;
-  }
-  return 200000; // default
+/** Strip ANSI/control characters and bound length to prevent terminal injection */
+function sanitizeDisplay(str, maxLen) {
+  if (!str) return '';
+  const cleaned = String(str)
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // CSI sequences (SGR, cursor, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')  // OSC sequences
+    .replace(/\x1b[()][AB012]/g, '')         // charset selection
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, '');   // C0 + C1 control characters
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen - 1) + '…' : cleaned;
 }
 
 function prettyModel(raw) {
@@ -179,384 +92,19 @@ function effortLabel(level) {
   return EFFORT_LABELS[level] || level || '—';
 }
 
-// ─── Git branch ──────────────────────────────────────────────────────────────
-// Simple in-memory cache with TTL
-const gitCache = { branch: null, ts: 0, dir: null };
-const GIT_TTL = 5000; // 5 s
-
-function getGitBranch(cwd) {
-  const now = Date.now();
-  if (gitCache.dir === cwd && gitCache.branch !== null && now - gitCache.ts < GIT_TTL) {
-    return gitCache.branch;
-  }
-  try {
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: cwd || process.cwd(),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2000,
-    }).trim();
-    if (branch === 'HEAD') {
-      // Detached HEAD — show short sha
-      const sha = execSync('git rev-parse --short HEAD', {
-        cwd: cwd || process.cwd(),
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 2000,
-      }).trim();
-      gitCache.branch = `(detached:${sha})`;
-    } else {
-      gitCache.branch = branch;
-    }
-  } catch {
-    gitCache.branch = null;
-  }
-  gitCache.ts = now;
-  gitCache.dir = cwd;
-  return gitCache.branch;
-}
-
-// ─── Path shortener ──────────────────────────────────────────────────────────
-function shortPath(fullPath, maxDepth) {
-  if (!fullPath) return '?';
-  const home = os.homedir();
-  let display = fullPath;
-  if (fullPath === home || fullPath.startsWith(home + path.sep)) {
-    display = '~' + fullPath.slice(home.length);
-  }
-  const parts = display.split(path.sep).filter(Boolean);
-  if (parts.length <= maxDepth) return display;
-  // Show ".../lastN"
-  const last = parts.slice(-maxDepth);
-  return (display.startsWith('~') ? '~' : '') + '…/' + last.join('/');
-}
-
-// ─── Skills ──────────────────────────────────────────────────────────────────
-// Follows ccstatusline's pattern: per-session JSONL files keyed by session_id,
-// with a --hook subcommand for writing (called from Claude Code hooks).
-//
-// Hook mode  (--hook):   stdin = {session_id, hook_event_name, tool_name, tool_input}
-//                         → appends to ~/.cache/cclitehud/skills-<sessionId>.jsonl
-//
-// Normal mode (piped):   stdin = StatusJSON {session_id, ...}
-//                         → reads JSONL for current session, returns last skill
-//
-// This gives reliable per-session isolation using Claude Code's own session_id,
-// no PPID guessing or TTL hacks needed.
-const CACHE_DIR = path.join(os.homedir(), '.cache', 'cclitehud');
-const SKILL_FILE_MAX_AGE_MS = 7 * 24 * 3600 * 1000; // prune session files older than this
-
-/** Sanitize session ID to prevent path traversal in file names */
-function sanitizeSessionId(id) {
-  if (!id) return '';
-  return String(id).replace(/[^a-zA-Z0-9_-]/g, '');
-}
-
-function getSkillsFilePath(sessionId) {
-  return path.join(CACHE_DIR, 'skills-' + sanitizeSessionId(sessionId) + '.jsonl');
-}
-
-/** Strip ANSI/control characters and bound length to prevent terminal injection */
-function sanitizeDisplay(str, maxLen) {
-  if (!str) return '';
-  const cleaned = String(str)
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // CSI sequences (SGR, cursor, etc.)
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')  // OSC sequences
-    .replace(/\x1b[()][AB012]/g, '')         // charset selection
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, '');   // C0 + C1 control characters
-  return cleaned.length > maxLen ? cleaned.slice(0, maxLen - 1) + '…' : cleaned;
-}
-
-/** Handle --hook: parse hook payload from stdin, write skill invocation to JSONL */
-function handleHook() {
-  let raw = '';
-  try { raw = readFileSync(0, 'utf8'); } catch { return; }
-
-  let data;
-  try { data = JSON.parse(raw); } catch { return; }
-
-  const sessionId = data.session_id;
-  if (!sessionId) return;
-
-  let skillName = '';
-  if (data.hook_event_name === 'PreToolUse' && data.tool_name === 'Skill') {
-    skillName = sanitizeDisplay((data.tool_input && data.tool_input.skill) || '', 80);
-  } else if (data.hook_event_name === 'UserPromptSubmit') {
-    const m = /^\/([a-zA-Z0-9_:-]+)(?:\s|$)/.exec(data.prompt || '');
-    if (m) skillName = m[1];
-  }
-  if (!skillName) return;
-
-  const filePath = getSkillsFilePath(sessionId);
-  try { mkdirSync(path.dirname(filePath), { recursive: true }); } catch {}
-  // First write for a new session — a cheap moment to prune stale session files
-  if (!existsSync(filePath)) pruneStaleSkillFiles();
-  const entry = JSON.stringify({
-    timestamp: new Date().toISOString(),
-    session_id: sessionId,
-    skill: skillName,
-    source: data.hook_event_name,
-  });
-  try { writeFileSync(filePath, entry + '\n', { flag: 'a' }); } catch {}
-}
-
-/** Delete per-session skill files not touched for SKILL_FILE_MAX_AGE_MS */
-function pruneStaleSkillFiles() {
-  const cutoff = Date.now() - SKILL_FILE_MAX_AGE_MS;
-  let files;
-  try { files = readdirSync(CACHE_DIR); } catch { return; }
-  for (const f of files) {
-    if (!f.startsWith('skills-') || !f.endsWith('.jsonl')) continue;
-    const full = path.join(CACHE_DIR, f);
-    try {
-      if (statSync(full).mtimeMs < cutoff) unlinkSync(full);
-    } catch {}
-  }
-}
-
-/** Read the last skill for a given session from its JSONL file */
-function getRecentSkillBySession(sessionId) {
-  if (!sessionId) return null;
-  const filePath = getSkillsFilePath(sessionId);
-  try {
-    const raw = readFileSync(filePath, 'utf8');
-    const lines = raw.trim().split('\n').filter(Boolean);
-    // Scan backward for the last parseable line (resilient to partial writes)
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const entry = JSON.parse(lines[i]);
-        if (entry && entry.skill) return entry.skill;
-      } catch { /* corrupt line — try previous */ }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function getRecentSkill(data) {
-  // Use per-session JSONL only (uses session_id from StatusJSON)
-  if (data && data.session_id) {
-    return getRecentSkillBySession(data.session_id);
-  }
-  return null;
-}
-
-// ─── Context-size formatter ──────────────────────────────────────────────────
-function formatSize(n) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(0) + 'M';
-  if (n >= 1_000) return Math.round(n / 1_000) + 'K';
-  return String(n);
-}
-
-// ─── Progress bar renderer ───────────────────────────────────────────────────
-//   ━ bright = cached  |  ━ dim = uncached  |  ─ = remaining
-//
-// usedPct      — total usage (0–100)
-// cachePctUsed — cache-hit portion of USED context (0–100), NOT of total window
-// width        — character width of the bar
-// color        — single fill color for the whole used part (usage-limit bars);
-//                omit to split cached / uncached by color (ctx bar)
-function renderBar(usedPct, cachePctUsed, width, color) {
-  usedPct = Math.max(0, Math.min(100, usedPct));
-  cachePctUsed = Math.max(0, Math.min(100, cachePctUsed || 0));
-
-  // Cache as percentage of total bar width
-  const cacheOfTotal = (cachePctUsed / 100) * usedPct;
-
-  const totalCols = Math.round((usedPct / 100) * width);
-  const cacheCols = Math.round((cacheOfTotal / 100) * width);
-
-  // Clamp to prevent overlap
-  const c = Math.min(cacheCols, totalCols);
-  const u = Math.max(0, totalCols - c);
-  const e = Math.max(0, width - totalCols);
-
-  let bar = '';
-  if (c > 0) bar += fg(color || C.barFilled) + BAR_FILL.repeat(c) + R;
-  if (u > 0) bar += fg(color || C.barUncached) + BAR_FILL.repeat(u) + R;
-  if (e > 0) bar += fg(C.barTrack) + BAR_TRACK.repeat(e) + R;
-  return bar;
-}
-
-// ─── Line builders ───────────────────────────────────────────────────────────
+// ─── Statusline ──────────────────────────────────────────────────────────────
 function dimDot() {
   return fg(C.separator) + D + NBSP + SEP + NBSP + R;
 }
 
-function renderLine1(data) {
-  const parts = [];
-
-  // Model
+// Model · effort — StatusJSON: { model, effort: { level: string|null } | null }
+function renderStatusline(data) {
   const model = prettyModel(data.model);
-  parts.push(B + fg(C.model) + model + R);
-
-  // Thinking effort — StatusJSON: { effort: { level: string|null } | null }
   const effortLevel = (data.effort && data.effort.level) || null;
-  parts.push(
-    effortColor(effortLevel) + B + effortGlyph() + NBSP + effortLabel(effortLevel) + R,
-  );
-
-  // Current directory (prefer worktree original_cwd if inside a worktree)
-  let cwd = data.cwd || (data.workspace && data.workspace.current_dir) || process.cwd();
-  if (data.worktree && data.worktree.original_cwd) {
-    cwd = data.worktree.original_cwd;
-  }
-  parts.push(fg(C.dir) + shortPath(cwd, CONFIG.maxDirDepth) + R);
-
-  // Git branch (prefer worktree branch if available)
-  const worktreeBranch = data.worktree && data.worktree.branch;
-  const gitBranch = worktreeBranch || getGitBranch(cwd);
-  if (gitBranch) {
-    parts.push(fg(C.git) + '⎇' + NBSP + sanitizeDisplay(gitBranch, 80) + R);
-  }
-
-  // Recent skill (per-session via session_id from StatusJSON)
-  const skill = getRecentSkill(data);
-  if (skill) {
-    // Build the prefix (everything before skill) to measure its visible width
-    const prefix = '\x1b[0m' + parts.join(dimDot()).replace(/ /g, NBSP);
-    // Separator that would precede the skill, plus skill icon + NBSP
-    const skillPrefix = dimDot() + fg(C.skill) + '✦' + NBSP;
-    const skillSuffix = R;
-    const prefixWidth = visibleLen(prefix);
-    const skillPrefixWidth = visibleLen(skillPrefix) + visibleLen(skillSuffix);
-
-    // Get terminal width
-    const termWidth = (data && data.terminal_width)
-      || process.stdout.columns
-      || (process.env.COLUMNS && parseInt(process.env.COLUMNS, 10))
-      || 120;
-    const available = Math.max(0, termWidth - prefixWidth - skillPrefixWidth);
-
-    // CJK-aware: truncate by display columns; skip entirely if no room
-    const skillStr = available > 2 ? truncateToWidth(skill, available) : '';
-
-    if (skillStr) {
-      parts.push(fg(C.skill) + '✦' + NBSP + skillStr + R);
-    }
-  }
-
-  return '\x1b[0m' + parts.join(dimDot()).replace(/ /g, NBSP);
-}
-
-function renderLine2(data) {
-  const ctx = data.context_window || {};
-
-  // Determine context window size — validate it's a positive finite number
-  const modelId = getModelId(data.model);
-  const rawCtxSize = ctx.context_window_size;
-  const ctxSize = (typeof rawCtxSize === 'number' && Number.isFinite(rawCtxSize) && rawCtxSize > 0)
-    ? rawCtxSize
-    : getContextSize(modelId);
-
-  // Total context usage percentage (from Claude Code — already correct)
-  let usedPct = 0;
-  if (typeof ctx.used_percentage === 'number' && Number.isFinite(ctx.used_percentage)) {
-    usedPct = ctx.used_percentage;
-  } else if (ctx.current_usage) {
-    const cu = ctx.current_usage;
-    const actual =
-      (typeof cu === 'object' ? num(cu.input_tokens) : num(cu)) +
-      (typeof cu === 'object' ? num(cu.cache_creation_input_tokens) : 0) +
-      (typeof cu === 'object' ? num(cu.cache_read_input_tokens) : 0);
-    usedPct = (actual / ctxSize) * 100;
-  }
-
-  // Cache hit rate: what % of the actual context was read from cache.
-  // actualContext = input_tokens + cache_creation + cache_read (ALL THREE)
-  // cacheHitRate  = cache_read / actualContext * 100
-  // (Only cache_read counts as "hit"; cache_creation is new cache writes, billed higher)
-  let cacheHitRate = 0;
-  if (ctx.current_usage && typeof ctx.current_usage === 'object') {
-    const cu = ctx.current_usage;
-    const fresh = num(cu.input_tokens);
-    const create = num(cu.cache_creation_input_tokens);
-    const read = num(cu.cache_read_input_tokens);
-    const actual = fresh + create + read;
-    if (actual > 0) {
-      cacheHitRate = Math.min(100, (read / actual) * 100);
-    }
-  }
-
-  const bar = renderBar(usedPct, cacheHitRate, CONFIG.barWidth);
-  const pctStr = usedPct.toFixed(0) + '%';
-  const sizeStr = formatSize(ctxSize);
-
-  let line = '';
-  // Label with context window size
-  line += fg(C.label) + 'ctx' + NBSP + fg(C.separator) + sizeStr + NBSP + R;
-  // Bar
-  line += bar;
-  // Percentage
-  line += NBSP + fg(C.barPct) + B + pctStr + R;
-
-  // Cached hit rate (only if we have cache data)
-  if (cacheHitRate > 0.5) {
-    const cacheStr = cacheHitRate.toFixed(0) + '%';
-    line += NBSP + fg(C.separator) + D + SEP + R + NBSP;
-    line += fg(C.barFilled) + '↖' + NBSP + 'cached' + NBSP + cacheStr + R;
-  }
-
-  // Replace regular spaces with NBSP for VSCode compatibility
-  return '\x1b[0m' + line.replace(/ /g, NBSP);
-}
-
-// Usage limits — StatusJSON: { rate_limits: { five_hour, seven_day } }, each
-// { used_percentage, resets_at (unix seconds) }. Present only for Claude.ai
-// subscription logins, after the first API response.
-function formatCountdown(resetsAt, nowMs) {
-  const secs = Number(resetsAt) - nowMs / 1000;
-  if (!Number.isFinite(secs) || secs <= 0) return '';
-  const mins = Math.ceil(secs / 60);
-  const d = Math.floor(mins / 1440);
-  const h = Math.floor((mins % 1440) / 60);
-  const m = mins % 60;
-  if (d > 0) return d + 'd' + (h > 0 ? h + 'h' : '');
-  if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '');
-  return m + 'm';
-}
-
-// Threshold color for a limit window, or null below the warn threshold
-function limitLevelColor(pct) {
-  if (pct >= CONFIG.limitCritPct) return C.pctCrit;
-  if (pct >= CONFIG.limitWarnPct) return C.pctWarn;
-  return null;
-}
-
-function renderLimit(label, win, nowMs) {
-  if (!win || typeof win.used_percentage !== 'number' || !Number.isFinite(win.used_percentage)) {
-    return null;
-  }
-  const pct = Math.max(0, Math.min(100, win.used_percentage));
-  const level = limitLevelColor(pct);
-  let s = fg(C.label) + label + NBSP + R;
-  s += renderBar(pct, 0, CONFIG.limitBarWidth, level || C.barFilled);
-  s += NBSP + fg(level || C.barPct) + B + pct.toFixed(0) + '%' + R;
-  const countdown = formatCountdown(win.resets_at, nowMs);
-  if (countdown) s += NBSP + fg(C.separator) + '↻' + countdown + R;
-  return s;
-}
-
-function formatUsd(usd) {
-  if (usd >= 1000) return '$' + Math.round(usd).toLocaleString('en-US');
-  return '$' + usd.toFixed(2);
-}
-
-// weeklyCost — override for preview/doctor; otherwise read from the cost cache
-function renderLine3(data, nowMs, weeklyCost) {
-  const rl = data && data.rate_limits;
-  if (!rl || typeof rl !== 'object') return null;
-  const now = nowMs || Date.now();
   const parts = [
-    renderLimit('5h', rl.five_hour, now),
-    renderLimit('7d', rl.seven_day, now),
-  ].filter(Boolean);
-  if (parts.length === 0) return null;
-  const cost = weeklyCost !== undefined ? weeklyCost : getWeeklyCost(rl.seven_day, now);
-  if (typeof cost === 'number' && Number.isFinite(cost)) {
-    parts.push(fg(C.cost) + LOCAL_ICON + NBSP + formatUsd(cost) + R);
-  }
+    B + fg(C.model) + model + R,
+    effortColor(effortLevel) + B + effortGlyph() + NBSP + effortLabel(effortLevel) + R,
+  ];
   return '\x1b[0m' + parts.join(dimDot()).replace(/ /g, NBSP);
 }
 
@@ -566,17 +114,15 @@ function renderLine3(data, nowMs, weeklyCost) {
 // <CLAUDE_CONFIG_DIR|~/.claude>/projects/**/*.jsonl (subagents included),
 // deduplicated by message.id + requestId (one response spans several lines).
 //
-// Scanning is done by a detached `--refresh-cost` child so rendering never
-// blocks; the statusline shows the last cached value for the same window.
+// The plugin runs `--refresh-cost <windowStart>` at most once a minute
+// and reads the cache this writes.
 const COST_CACHE_FILE = path.join(CACHE_DIR, 'weekly-cost.json');
-const COST_LOCK_FILE = path.join(CACHE_DIR, 'weekly-cost.lock');
-const COST_TTL_MS = 60 * 1000;
-const COST_LOCK_STALE_MS = 2 * 60 * 1000;
-const WEEK_SECS = 7 * 86400;
 
-// $ per million tokens: [input, output, cacheRead]. Cache writes are derived:
-// 5m = 1.25× input, 1h = 2× input. First matching prefix wins, so more
-// specific IDs must come before shorter ones.
+// $ per million tokens: [input, output, cacheRead], Anthropic API list prices
+// as of 2026-10. Cache writes are derived: 5m = 1.25× input, 1h = 2× input.
+// First matching prefix wins, so more specific IDs come before shorter ones.
+// Not modeled: long-context premiums of older 1M-context betas, and fast mode
+// on models whose fast price is not 2× (FAST_MULTIPLIER).
 const PRICING = [
   ['claude-fable-5-1', [10, 50, 0.25]],
   ['claude-mythos-5-1', [10, 50, 0.25]],
@@ -592,15 +138,18 @@ const PRICING = [
   ['claude-sonnet-5-5', [2, 10, 0.2]],
   ['claude-sonnet-5', [2, 10, 0.2]],
   ['claude-sonnet-4', [3, 15, 0.3]],
+  ['claude-3-7-sonnet', [3, 15, 0.3]],
+  ['claude-3-5-sonnet', [3, 15, 0.3]],
   ['claude-haiku-5-5', [0.1, 0.5, 0.01]],
   ['claude-haiku-4-5', [1, 5, 0.1]],
   ['claude-3-5-haiku', [0.8, 4, 0.08]],
 ];
 const HAIKU_55_LONG = [0.5, 2.5, 0.05]; // prompts over 100K tokens
-const FAST_MULTIPLIER = 2; // usage.speed === 'fast'
+const FAST_MULTIPLIER = 2; // usage.speed === 'fast' (Opus 5 / 5.5 fast mode)
 
 function priceFor(model) {
-  const id = String(model || '').replace(/^(?:us\.|eu\.|global\.)?anthropic\./, '');
+  // Bedrock-style IDs: an optional region prefix (us., eu., apac., …) + anthropic.
+  const id = String(model || '').replace(/^(?:[a-z]+\.)?anthropic\./, '');
   for (const [prefix, price] of PRICING) {
     if (id.startsWith(prefix)) return price;
   }
@@ -626,8 +175,7 @@ function usageCostUsd(model, u) {
 }
 
 function projectsDir() {
-  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-  return path.join(base, 'projects');
+  return path.join(CONFIG_DIR, 'projects');
 }
 
 /** Scan transcripts and sum API-equivalent cost for messages at or after windowStart (unix s) */
@@ -677,231 +225,199 @@ function refreshCost(windowStart) {
     writeFileSync(tmp, JSON.stringify({ windowStart, usd, computedAt: Date.now() }));
     renameSync(tmp, COST_CACHE_FILE);
   } catch {}
-  try { unlinkSync(COST_LOCK_FILE); } catch {}
-}
-
-function spawnCostRefresh(windowStart) {
-  try {
-    mkdirSync(CACHE_DIR, { recursive: true });
-    try {
-      if (Date.now() - statSync(COST_LOCK_FILE).mtimeMs < COST_LOCK_STALE_MS) return; // refresh in flight
-      unlinkSync(COST_LOCK_FILE);
-    } catch {}
-    writeFileSync(COST_LOCK_FILE, String(process.pid), { flag: 'wx' });
-    const child = spawn(process.execPath, [__filename, '--refresh-cost', String(windowStart)], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-  } catch {}
-}
-
-/** Cached weekly cost for the given seven_day window, kicking off a refresh when stale */
-function getWeeklyCost(win, nowMs) {
-  const resetsAt = win && Number(win.resets_at);
-  if (!Number.isFinite(resetsAt) || resetsAt <= 0) return null;
-  // Round to the minute so jitter in resets_at doesn't look like a new window
-  const windowStart = Math.round((resetsAt - WEEK_SECS) / 60) * 60;
-  let cache = null;
-  try { cache = JSON.parse(readFileSync(COST_CACHE_FILE, 'utf8')); } catch {}
-  const sameWindow = cache && cache.windowStart === windowStart && typeof cache.usd === 'number';
-  if (!sameWindow || nowMs - num(cache.computedAt) > COST_TTL_MS) spawnCostRefresh(windowStart);
-  return sameWindow ? cache.usd : null;
 }
 
 // ─── Preview mode ────────────────────────────────────────────────────────────
 function preview() {
-  const sample = {
-    model: { id: 'deepseek-v4-pro' },
-    session_id: 'preview-session',
-    effort: { level: 'medium' },
-    cwd: os.homedir() + '/Projects',
-    worktree: null,
-    context_window: {
-      context_window_size: 1000000,
-      used_percentage: 45,
-      current_usage: {
-        // actualContext = fresh + create + read = 450000 (45% of 1M)
-        input_tokens: 5000,                   // fresh, uncached (new turn msg)
-        output_tokens: 32000,
-        cache_creation_input_tokens: 175000,  // new cache writes
-        cache_read_input_tokens: 270000,      // served from cache (hit!)
-        // → cacheHitRate = 270000 / 450000 = 60%
-      },
-    },
-  };
-
-  // Simulate a git branch
-  gitCache.branch = 'feature/statusline';
-  gitCache.ts = Date.now();
-  gitCache.dir = sample.cwd;
-
-  // Simulate a skill (per-session JSONL format, like the hook writes)
-  try {
-    mkdirSync(CACHE_DIR, { recursive: true });
-    const skillFile = path.join(CACHE_DIR, 'skills-preview-session.jsonl');
-    writeFileSync(skillFile, JSON.stringify({
-      timestamp: new Date().toISOString(),
-      session_id: 'preview-session',
-      skill: 'brainstorming',
-      source: 'PreToolUse',
-    }) + '\n');
-  } catch {}
-
-  // Gather all effort levels for showcase
   const efforts = ['low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
-
   console.log('');
-  console.log('  ╭──────────────── Preview — cclitehud ────────────────╮');
+  console.log('  Statusline — model · effort (terminal, below the prompt):');
   console.log('');
-
-  // ── Line 1 — all effort level variants ──
-  const baseData = { ...sample };
   for (const eff of efforts) {
-    baseData.effort = { level: eff };
-    console.log('  ' + renderLine1(baseData));
-  }
-
-  // ── Line 2 + 3 — main sample (45% used, 60% cached-of-used) ──
-  const nowSec = Date.now() / 1000;
-  sample.rate_limits = {
-    five_hour: { used_percentage: 23, resets_at: nowSec + 2 * 3600 + 14 * 60 },
-    seven_day: { used_percentage: 61, resets_at: nowSec + 3 * 86400 + 5 * 3600 },
-  };
-  console.log('');
-  console.log('  ' + renderLine2(sample));
-  console.log('  ' + renderLine3(sample, undefined, 186.42));
-  console.log('');
-
-  // ── Line 3 variants ──
-  console.log('  Usage limit variants:');
-  const limitVariants = [
-    { label: 'Warning (≥70%, yellow) and critical (≥90%, red)', five: 78, seven: 94 },
-    { label: 'Only 5h window reported (no weekly cost)', five: 42, seven: null },
-  ];
-  for (const v of limitVariants) {
-    const rl = { five_hour: { used_percentage: v.five, resets_at: nowSec + 38 * 60 } };
-    if (v.seven !== null) rl.seven_day = { used_percentage: v.seven, resets_at: nowSec + 20 * 3600 };
-    console.log('    ' + v.label);
-    console.log('    ' + renderLine3({ rate_limits: rl }, undefined, v.seven !== null ? 412.8 : null));
+    console.log('  ' + renderStatusline({ model: { id: 'claude-opus-5-5' }, effort: { level: eff } }));
   }
   console.log('');
-
-  // ── Line 2 variants ──
-  console.log('  Variants:');
-  const variants = [
-    { label: 'Low usage (12%), 90% cached hit rate', used: 12, hitRate: 90, size: 1000000 },
-    { label: 'High usage (85%), 56% cached hit rate', used: 85, hitRate: 56, size: 200000 },
-    { label: 'Medium usage (45%), no cache', used: 45, hitRate: 0, size: 200000 },
-  ];
-  for (const v of variants) {
-    const actual = Math.round((v.used / 100) * v.size);
-    const read = Math.round((v.hitRate / 100) * actual);
-    const remaining = actual - read;
-    // Split remaining between fresh and cache_creation
-    const create = Math.round(remaining * 0.95); // most of non-hit is new cache writes
-    const fresh = remaining - create;            // tiny bit is fresh tokens
-    const vData = {
-      model: v.size === 1000000 ? { id: 'deepseek-v4-pro' } : { id: 'claude-sonnet-4-6' },
-      context_window: {
-        context_window_size: v.size,
-        used_percentage: v.used,
-        current_usage: {
-          input_tokens: fresh,
-          cache_creation_input_tokens: create,
-          cache_read_input_tokens: read,
-        },
-      },
-    };
-    console.log('    ' + v.label);
-    console.log('    ' + renderLine2(vData));
-  }
-
-  console.log('');
-  console.log('  Legend:');
-  console.log('  ' + fg(C.barFilled) + BAR_FILL.repeat(10) + R + '  cached (bright)');
-  console.log('  ' + fg(C.barUncached) + BAR_FILL.repeat(10) + R + '  uncached (dim)');
-  console.log('  ' + fg(C.barTrack) + BAR_TRACK.repeat(10) + R + '  remaining');
-  console.log('');
-  console.log('  Effort icon: ◆ (unified for all levels — color indicates intensity)');
-  console.log('');
-  console.log('  ╰───────────────────────────────────────────────────────────────╯');
+  console.log('  The band above the prompt (directory, branch, skill, context and');
+  console.log('  usage bars, weekly cost) comes from the plugin in plugin/.');
+  console.log('  See README.md, or open preview.html.');
   console.log('');
 }
 
 // ─── Install mode ────────────────────────────────────────────────────────────
+const SETTINGS_PATH = path.join(CONFIG_DIR, 'settings.json');
+
 /** Shell-quote a path for safe embedding in command strings */
 function shellQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
 }
 
-function install() {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  const selfPath = path.resolve(__filename);
-  const nodePath = process.execPath || 'node';
-  const cmd = `${shellQuote(nodePath)} ${shellQuote(selfPath)}`;
-  const hookCmd = `${cmd} --hook`;
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-  let settings = {};
-  try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch {}
+/**
+ * True for a skill hook an older cclitehud installed: an `index.js` under a
+ * cclitehud (or a pre-rename) folder, or this very file, run with a
+ * standalone `--hook` argument.
+ */
+function isOwnHook(h) {
+  if (!h || typeof h.command !== 'string') return false;
+  const cmd = h.command;
+  if (!/(^|\s)--hook(\s|$)/.test(cmd)) return false;
+  // Folder names this project has shipped under (not the unrelated ccstatusline)
+  return cmd.includes(path.resolve(__filename))
+    || /(cclitehud|ccstatus|ccstatuslite|ccstatusline-custom)\/index\.js\b/.test(cmd);
+}
 
-  // statusLine
-  settings.statusLine = {
-    type: 'command',
-    command: cmd,
-    refreshInterval: 10,
-  };
+/** Remove our legacy skill hooks, dropping matcher groups they leave empty */
+function removeLegacyHooks(hooks) {
+  let removed = 0;
+  for (const event of ['PreToolUse', 'UserPromptSubmit']) {
+    if (!Array.isArray(hooks[event])) continue;
+    hooks[event] = hooks[event].filter(entry => {
+      if (!entry || !Array.isArray(entry.hooks)) return true;
+      const before = entry.hooks.length;
+      entry.hooks = entry.hooks.filter(h => !isOwnHook(h));
+      removed += before - entry.hooks.length;
+      return entry.hooks.length > 0 || before === 0;
+    });
+    if (hooks[event].length === 0) delete hooks[event];
+  }
+  return removed;
+}
 
-  // hooks — merge with existing, preserving other hooks
-  const hooks = settings.hooks || {};
-  if (!Array.isArray(hooks.PreToolUse)) hooks.PreToolUse = [];
-  if (!Array.isArray(hooks.UserPromptSubmit)) hooks.UserPromptSubmit = [];
+/**
+ * CLAUDE_CODE_PLUGIN_DIRS entries as Claude Code reads them: trimmed, `~`
+ * expanded, relative entries skipped (Claude Code ignores those too)
+ */
+function pluginDirEntries(value) {
+  return String(value || '').split(path.delimiter)
+    .map(p => p.trim().replace(/^~(?=$|\/)/, os.homedir()))
+    .filter(p => p && path.isAbsolute(p))
+    .map(p => path.resolve(p));
+}
 
-  // Helper: upsert our hook command within a matcher entry's hooks array
-  // Detect our own hooks by checking for the script's basename + --hook flag
-  const selfBasename = path.basename(selfPath);
-  function upsertHook(entry) {
-    if (!Array.isArray(entry.hooks)) entry.hooks = [];
-    const idx = entry.hooks.findIndex(h =>
-      h && typeof h.command === 'string'
-      && h.command.includes(selfBasename)
-      && h.command.includes('--hook'));
-    if (idx >= 0) {
-      entry.hooks[idx] = { type: 'command', command: hookCmd };
-    } else {
-      entry.hooks.push({ type: 'command', command: hookCmd });
+/** settings.json as an object; {} when missing, throws when unreadable */
+function readSettings() {
+  let raw;
+  try {
+    raw = readFileSync(SETTINGS_PATH, 'utf8');
+  } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw new Error(`cannot read ${SETTINGS_PATH}: ${e.message}`);
+  }
+  let settings;
+  try {
+    settings = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${SETTINGS_PATH} is not valid JSON (${e.message}) — fix it, or edit it by hand as README.md shows`);
+  }
+  if (!isPlainObject(settings)) throw new Error(`${SETTINGS_PATH} does not hold a JSON object`);
+  return settings;
+}
+
+/**
+ * Write atomically through any symlink (dotfile managers), keeping the file's
+ * mode (settings.json may hold tokens); the first run keeps a .bak of the
+ * original, later runs leave that backup alone
+ */
+function writeSettings(settings) {
+  mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+  let target = SETTINGS_PATH;
+  let mode = 0o600;
+  let backup = null; // the .bak this run made beside the real file
+  if (existsSync(SETTINGS_PATH)) {
+    target = realpathSync(SETTINGS_PATH);
+    mode = statSync(target).mode & 0o777;
+    if (!existsSync(target + '.bak')) {
+      backup = target + '.bak';
+      writeFileSync(backup, readFileSync(target), { mode });
+      chmodSync(backup, mode);
     }
   }
+  const tmp = target + '.' + process.pid + '.tmp';
+  writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n', { mode });
+  chmodSync(tmp, mode); // umask may have narrowed or widened it
+  renameSync(tmp, target);
+  return backup;
+}
 
-  // PreToolUse Skill hook — upsert by matcher
-  let skillMatcher = hooks.PreToolUse.find(h => h && h.matcher === 'Skill');
-  if (!skillMatcher) {
-    skillMatcher = { matcher: 'Skill', hooks: [] };
-    hooks.PreToolUse.push(skillMatcher);
+/** The node to write into the statusLine: a stable symlink over a versioned path */
+function stableNodePath() {
+  const exec = process.execPath || 'node';
+  let real;
+  try { real = realpathSync(exec); } catch { return exec; }
+  for (const link of ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']) {
+    try { if (realpathSync(link) === real) return link; } catch {}
   }
-  upsertHook(skillMatcher);
+  return exec;
+}
 
-  // UserPromptSubmit hook — upsert (preserve other UserPromptSubmit hooks)
-  let upsEntry = hooks.UserPromptSubmit.find(h => h && !h.matcher);
-  if (!upsEntry) {
-    upsEntry = { hooks: [] };
-    hooks.UserPromptSubmit.push(upsEntry);
+/** Files older versions left in the cache: per-session skill logs, cost lock */
+function removeLegacyCacheFiles() {
+  let files;
+  try { files = readdirSync(CACHE_DIR); } catch { return 0; }
+  let removed = 0;
+  for (const f of files) {
+    if ((f.startsWith('skills-') && f.endsWith('.jsonl')) || f === 'weekly-cost.lock') {
+      try { unlinkSync(path.join(CACHE_DIR, f)); removed++; } catch {}
+    }
   }
-  upsertHook(upsEntry);
+  return removed;
+}
 
-  settings.hooks = hooks;
+function install() {
+  const cmd = `${shellQuote(stableNodePath())} ${shellQuote(path.resolve(__filename))}`;
 
-  try { mkdirSync(path.dirname(settingsPath), { recursive: true }); } catch {}
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  let settings;
+  try {
+    settings = readSettings();
+    if (settings.env === null) delete settings.env;
+    if (settings.env !== undefined && !isPlainObject(settings.env)) {
+      throw new Error(`"env" in ${SETTINGS_PATH} is not an object — fix it first`);
+    }
+  } catch (e) {
+    console.error(`❌  ${e.message}`);
+    process.exit(1);
+  }
+
+  // statusLine — model · effort; keeps fields the user added (padding, …).
+  // Older installs wrote refreshInterval: 10 for the bars, no longer needed
+  const statusLine = { ...(isPlainObject(settings.statusLine) ? settings.statusLine : {}), type: 'command', command: cmd };
+  if (statusLine.refreshInterval === 10) delete statusLine.refreshInterval;
+  settings.statusLine = statusLine;
+
+  // Plugin — append our folder to CLAUDE_CODE_PLUGIN_DIRS, keeping others
+  const env = settings.env || {};
+  // and dropping this repo's folder under its old name
+  const dirs = String(env.CLAUDE_CODE_PLUGIN_DIRS || '').split(path.delimiter).map(p => p.trim()).filter(Boolean)
+    .filter(p => pluginDirEntries(p)[0] !== OLD_PLUGIN_DIR);
+  if (!pluginDirEntries(dirs.join(path.delimiter)).includes(PLUGIN_DIR)) dirs.push(PLUGIN_DIR);
+  env.CLAUDE_CODE_PLUGIN_DIRS = dirs.join(path.delimiter);
+  settings.env = env;
+
+  // Skill tracking moved into the plugin — drop the old hooks
+  let removed = 0;
+  if (isPlainObject(settings.hooks)) {
+    removed = removeLegacyHooks(settings.hooks);
+    if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  }
+
+  let backup;
+  try {
+    backup = writeSettings(settings);
+  } catch (e) {
+    console.error(`❌  cannot write ${SETTINGS_PATH}: ${e.message}`);
+    process.exit(1);
+  }
+  const cleaned = removeLegacyCacheFiles();
 
   console.log(`✅  cclitehud installed!`);
   console.log(`   statusLine → ${cmd}`);
-  console.log(`   hooks      → PreToolUse + UserPromptSubmit`);
-  console.log(`   config     → ${settingsPath}`);
-  console.log(`   Restart Claude Code to activate.`);
-
-  // Also run preview to confirm it works
-  console.log('');
+  console.log(`   plugin     → env.CLAUDE_CODE_PLUGIN_DIRS includes ${PLUGIN_DIR}`);
+  if (removed > 0) console.log(`   hooks      → removed ${removed} legacy skill hook(s)`);
+  if (cleaned > 0) console.log(`   cache      → removed ${cleaned} legacy file(s) from ${CACHE_DIR}`);
+  console.log(`   config     → ${SETTINGS_PATH}`);
+  if (backup) console.log(`   backup     → ${backup} (the file as it was before this run)`);
+  console.log(`   Restart Claude Code (and the desktop app) to activate.`);
   preview();
 }
 
@@ -923,22 +439,10 @@ function doctor() {
   // 1. Node.js version
   const nodeVersion = process.versions.node;
   const major = parseInt(nodeVersion.split('.')[0], 10);
-  if (major >= 14) {
-    pass('Node.js version', `v${nodeVersion} (≥14 required)`);
-  } else {
-    fail('Node.js version', `v${nodeVersion} — need ≥14`);
-  }
+  if (major >= 14) pass('Node.js version', `v${nodeVersion} (≥14 required)`);
+  else fail('Node.js version', `v${nodeVersion} — need ≥14`);
 
-  // 2. index.js exists and is readable
-  const selfPath = __filename;
-  try {
-    readFileSync(selfPath);
-    pass('index.js readable', selfPath);
-  } catch (e) {
-    fail('index.js readable', `Cannot read: ${e.message}`);
-  }
-
-  // 3. Cache directory
+  // 2. Cache directory (weekly cost cache)
   try {
     mkdirSync(CACHE_DIR, { recursive: true });
     const testFile = path.join(CACHE_DIR, '.doctor-test');
@@ -950,178 +454,77 @@ function doctor() {
     fail('Cache directory', `${CACHE_DIR} — ${e.message}`);
   }
 
-  // 4. Git availability and branch detection
-  try {
-    const gitVer = execSync('git --version', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 }).trim();
-    pass('Git available', gitVer);
-  } catch {
-    warn('Git available', 'git not found in PATH — branch display disabled');
-  }
+  // 3. Plugin folder
+  const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.tsx'];
+  const missing = pluginFiles.filter(f => !existsSync(path.join(PLUGIN_DIR, f)));
+  if (missing.length === 0) pass('Plugin folder', PLUGIN_DIR);
+  else fail('Plugin folder', `${PLUGIN_DIR} — missing ${missing.join(', ')}`);
 
-  const testCwd = process.cwd();
-  const testBranch = getGitBranch(testCwd);
-  if (testBranch) {
-    pass('Git branch detection', `detected: ${testBranch} (cwd: ${testCwd})`);
-  } else {
-    warn('Git branch detection', `no branch in ${testCwd} (not a git repo or detached HEAD)`);
-  }
-
-  // 5. settings.json — statusLine config
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  // 4. settings.json
+  const settingsPath = SETTINGS_PATH;
   let settings = null;
   try {
-    settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    settings = readSettings();
+    pass('settings.json', existsSync(settingsPath) ? settingsPath : `${settingsPath} (not created yet)`);
   } catch (e) {
-    fail('settings.json', `Cannot read/parse: ${e.message}`);
+    fail('settings.json', e.message);
   }
 
   if (settings) {
-    // Check statusLine
+    // statusLine → this file. Handles `'/path/node' '/path/index.js'` and `node /path`
     const sl = settings.statusLine;
     if (sl && sl.type === 'command' && typeof sl.command === 'string') {
-      // Parse command — handle both `node /path` and `'/path/node' '/path/index.js'` formats
-      const rawCmd = sl.command;
-      // Extract script path: last quoted or unquoted segment that looks like a file path
-      const quotedPaths = [...rawCmd.matchAll(/'([^']+)'/g)].map(m => m[1]);
-      const scriptPath = quotedPaths.length >= 2
-        ? quotedPaths[1]                          // second quoted arg = script
-        : rawCmd.replace(/^node\s+/, '').split(' ')[0]; // legacy format
-      // Resolve to absolute for comparison
-      let resolvedCmd = scriptPath;
-      if (!path.isAbsolute(resolvedCmd)) {
-        resolvedCmd = path.resolve(path.dirname(settingsPath), resolvedCmd);
-      }
-      const resolvedSelf = path.resolve(selfPath);
-
-      if (resolvedCmd === resolvedSelf) {
-        pass('statusLine config', `command points to this file (refreshInterval: ${sl.refreshInterval || 'default'})`);
-      } else if (scriptPath.includes('cclitehud')) {
-        warn('statusLine config', `path mismatch:\n        settings → ${scriptPath}\n        actual   → ${resolvedSelf}`);
-      } else {
-        warn('statusLine config', `points to different script: ${scriptPath}`);
-      }
+      const quoted = [...sl.command.matchAll(/'([^']+)'/g)].map(m => m[1]);
+      const scriptPath = (quoted.length >= 2 ? quoted[1] : sl.command.replace(/^node\s+/, '').split(' ')[0])
+        .replace(/^~(?=$|\/)/, os.homedir());
+      const resolved = path.isAbsolute(scriptPath) ? scriptPath : path.resolve(path.dirname(settingsPath), scriptPath);
+      if (resolved === path.resolve(__filename)) pass('statusLine config', 'command points to this file');
+      else if (scriptPath.includes('cclitehud')) warn('statusLine config', `path mismatch:\n        settings → ${scriptPath}\n        actual   → ${path.resolve(__filename)}`);
+      else warn('statusLine config', `points to a different script: ${scriptPath}`);
     } else {
-      fail('statusLine config', 'missing or invalid statusLine in settings.json');
+      fail('statusLine config', 'missing — model · effort not shown in the terminal (run --install)');
     }
 
-    // Check hooks — look for our `index.js --hook` command anywhere in the
-    // matching entries (install() upserts, so it need not be the first hook)
+    // Plugin registered through env.CLAUDE_CODE_PLUGIN_DIRS
+    const pluginDirs = settings.env && settings.env.CLAUDE_CODE_PLUGIN_DIRS;
+    if (pluginDirEntries(pluginDirs).includes(PLUGIN_DIR)) {
+      pass('Plugin config', 'env.CLAUDE_CODE_PLUGIN_DIRS includes the plugin folder');
+    } else if (pluginDirEntries(process.env.CLAUDE_CODE_PLUGIN_DIRS).includes(PLUGIN_DIR)) {
+      pass('Plugin config', 'CLAUDE_CODE_PLUGIN_DIRS (process environment) includes the plugin folder');
+    } else {
+      fail('Plugin config', 'plugin folder not in env.CLAUDE_CODE_PLUGIN_DIRS — no band above the prompt (run --install)');
+    }
+
+    // Legacy skill hooks from an older install
     const hooks = settings.hooks || {};
-    const selfBasename = path.basename(selfPath);
-    const hasOurHook = (entries, matcherOk) => (Array.isArray(entries) ? entries : []).some(e =>
-      e && matcherOk(e.matcher) && Array.isArray(e.hooks) && e.hooks.some(h =>
-        h && typeof h.command === 'string'
-        && h.command.includes(selfBasename) && h.command.includes('--hook')));
-
-    // PreToolUse → Skill
-    if (hasOurHook(hooks.PreToolUse, m => m === 'Skill')) {
-      pass('PreToolUse Skill hook', 'configured correctly');
-    } else {
-      fail('PreToolUse Skill hook', 'not configured — skill tracking disabled');
-    }
-
-    // UserPromptSubmit
-    if (hasOurHook(hooks.UserPromptSubmit, () => true)) {
-      pass('UserPromptSubmit hook', 'configured correctly');
-    } else {
-      warn('UserPromptSubmit hook', 'not configured — /slash command tracking disabled');
-    }
+    const legacy = ['PreToolUse', 'UserPromptSubmit'].some(ev => (Array.isArray(hooks[ev]) ? hooks[ev] : [])
+      .some(e => e && Array.isArray(e.hooks) && e.hooks.some(isOwnHook)));
+    if (legacy) warn('Legacy hooks', '`index.js --hook` entries are no longer needed — run --install to remove them');
+    else pass('Legacy hooks', 'none');
   }
 
-  // 6. Skill tracking round-trip
-  const testSessionId = 'doctor-test-' + process.pid;
-  const testSkillName = 'doctor-test-skill';
+  // 5. Weekly cost scan (dry run over the current week, nothing written)
   try {
-    const testFilePath = getSkillsFilePath(testSessionId);
-    const entry = JSON.stringify({
-      timestamp: new Date().toISOString(),
-      session_id: testSessionId,
-      skill: testSkillName,
-      source: 'PreToolUse',
-    });
-    writeFileSync(testFilePath, entry + '\n');
-    const readBack = getRecentSkillBySession(testSessionId);
-    if (readBack === testSkillName) {
-      pass('Skill tracking', 'write + read round-trip OK');
-    } else {
-      fail('Skill tracking', `wrote "${testSkillName}", read back "${readBack}"`);
-    }
-    unlinkSync(testFilePath);
+    const t0 = Date.now();
+    const usd = computeWindowCost(Math.floor(Date.now() / 1000) - 7 * 86400);
+    pass('Weekly cost scan', `${projectsDir()} → $${usd.toFixed(2)} over the last 7 days (${Date.now() - t0} ms)`);
   } catch (e) {
-    fail('Skill tracking', `round-trip failed: ${e.message}`);
+    fail('Weekly cost scan', e.message);
   }
 
-  // 7. Render test
+  // 6. Render test
   try {
-    const mockData = {
-      model: { id: 'test-model' },
-      session_id: 'doctor-render-test',
-      effort: { level: 'high' },
-      cwd: os.homedir(),
-      context_window: {
-        context_window_size: 200000,
-        used_percentage: 42,
-        current_usage: {
-          input_tokens: 10000,
-          output_tokens: 5000,
-          cache_creation_input_tokens: 30000,
-          cache_read_input_tokens: 44000,
-        },
-      },
-    };
-    const line1 = renderLine1(mockData);
-    const line2 = renderLine2(mockData);
-    mockData.rate_limits = {
-      five_hour: { used_percentage: 30, resets_at: Date.now() / 1000 + 3600 },
-      seven_day: { used_percentage: 50, resets_at: Date.now() / 1000 + 86400 },
-    };
-    const line3 = renderLine3(mockData, undefined, 123.45);
-    if (line1.length > 0 && line2.length > 0 && line3) {
-      pass('Render test', 'all three lines generated');
-      console.log('');
-      console.log('  ' + line1);
-      console.log('  ' + line2);
-      console.log('  ' + line3);
-      console.log('');
+    const line = renderStatusline({ model: { id: 'test-model' }, effort: { level: 'high' } });
+    if (line.includes('test-model') && line.includes('high')) {
+      pass('Render test', 'statusline generated');
+      console.log('  ' + line);
     } else {
-      fail('Render test', 'empty output');
+      fail('Render test', 'unexpected output');
     }
   } catch (e) {
     fail('Render test', e.message);
   }
 
-  // 8. ANSI 256-color support
-  if (process.stdout.isTTY && (process.stdout.hasColors ? process.stdout.hasColors(256) : true)) {
-    pass('ANSI 256-color', 'terminal supports 256 colors');
-  } else if (!process.stdout.isTTY) {
-    warn('ANSI 256-color', 'not a TTY — colors may not render (this is normal for doctor mode)');
-  } else {
-    warn('ANSI 256-color', 'terminal may not support 256 colors');
-  }
-
-  // 9. visibleLen CJK test
-  const cjkTest = visibleLen('\x1b[38;5;111m中文test\x1b[0m');
-  if (cjkTest === 8) {
-    pass('visibleLen CJK', `'中文test' → 8 columns (correct)`);
-  } else {
-    fail('visibleLen CJK', `'中文test' → ${cjkTest} columns (expected 8)`);
-  }
-
-  // 10. Existing session data summary
-  try {
-    const files = readdirSync(CACHE_DIR);
-    const skillFiles = files.filter(f => f.startsWith('skills-') && f.endsWith('.jsonl'));
-    const debugLog = files.includes('debug.jsonl');
-    if (skillFiles.length > 0) {
-      pass('Cache data', `${skillFiles.length} skill files${debugLog ? ', debug log active' : ''}`);
-    } else {
-      warn('Cache data', 'no skill files yet (normal on first run)');
-    }
-  } catch {
-    warn('Cache data', 'could not enumerate cache directory');
-  }
-
-  // Print results
   console.log('');
   for (const c of checks) {
     const detail = typeof c.detail === 'string' ? c.detail.replace(/\n/g, '\n        ') : String(c.detail);
@@ -1143,13 +546,15 @@ function doctor() {
 function main() {
   const DEBUG = process.argv.includes('--debug');
 
-  // --hook mode: process hook payload from Claude Code (PreToolUse / UserPromptSubmit)
+  // --hook: legacy skill hook from an older install — skill tracking now lives
+  // in the plugin. Swallow stdin and print nothing (hook stdout reaches the
+  // model on UserPromptSubmit); --install removes these hooks.
   if (process.argv.includes('--hook')) {
-    handleHook();
+    try { readFileSync(0); } catch {}
     return;
   }
 
-  // --refresh-cost mode: background recompute of the weekly cost cache
+  // --refresh-cost <windowStart>: recompute the weekly cost cache (plugin)
   const rcIdx = process.argv.indexOf('--refresh-cost');
   if (rcIdx >= 0) {
     const windowStart = Number(process.argv[rcIdx + 1]);
@@ -1157,19 +562,16 @@ function main() {
     return;
   }
 
-  // --preview mode: show sample rendering
   if (process.argv.includes('--preview') || process.argv.includes('-p')) {
     preview();
     return;
   }
 
-  // --doctor mode: diagnose installation and configuration
   if (process.argv.includes('--doctor')) {
     doctor();
     return;
   }
 
-  // --install mode: auto-configure ~/.claude/settings.json
   if (process.argv.includes('--install')) {
     install();
     return;
@@ -1192,32 +594,19 @@ function main() {
     process.exit(0);
   }
 
-  // Debug mode: log raw StatusJSON context_window + model fields to a file
+  // Debug mode: log the raw StatusJSON fields the statusline reads
   if (DEBUG) {
     try {
       mkdirSync(CACHE_DIR, { recursive: true });
-      const logPath = path.join(CACHE_DIR, 'debug.jsonl');
-      const entry = {
+      appendFileSync(path.join(CACHE_DIR, 'debug.jsonl'), JSON.stringify({
         ts: new Date().toISOString(),
         model: data.model,
-        context_window: data.context_window,
         effort: data.effort,
-        status: data.status,
-        rate_limits: data.rate_limits,
-        // derived values for quick diagnosis
-        _usedPct_isNumber: typeof (data.context_window && data.context_window.used_percentage) === 'number',
-        _usedPct_value: data.context_window && data.context_window.used_percentage,
-        _ctxSize: data.context_window && data.context_window.context_window_size,
-      };
-      appendFileSync(logPath, JSON.stringify(entry) + '\n');
+      }) + '\n');
     } catch {}
   }
 
-  // Render and output
-  process.stdout.write(renderLine1(data) + '\n');
-  process.stdout.write(renderLine2(data) + '\n');
-  const line3 = renderLine3(data);
-  if (line3) process.stdout.write(line3 + '\n');
+  process.stdout.write(renderStatusline(data) + '\n');
 }
 
 main();

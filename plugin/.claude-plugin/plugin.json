@@ -1,0 +1,7 @@
+{
+  "name": "cclitehud",
+  "version": "2.0.0",
+  "description": "cclitehud band above the prompt (dir, branch, skill, context and usage-limit bars, weekly API-equivalent cost) in the terminal and the desktop Code tab",
+  "author": { "name": "zesming" },
+  "types": "./types/index.d.ts"
+}

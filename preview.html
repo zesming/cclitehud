@@ -4,122 +4,85 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
   *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#1a1b26;color:#c0caf5;font:14px 'JetBrains Mono','SF Mono','Fira Code',monospace;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:40px}
-  .terminal{background:#16161e;border-radius:12px;padding:32px 36px;box-shadow:0 8px 32px rgba(0,0,0,.5);max-width:980px;width:100%}
+  body{background:#1a1b26;color:#c0caf5;font:14px 'JetBrains Mono','SF Mono','Fira Code',monospace;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:40px 16px}
+  .terminal{background:#16161e;border-radius:12px;padding:32px 36px;box-shadow:0 8px 32px rgba(0,0,0,.5);max-width:1040px;width:100%}
   .term-title{color:#565f89;font-size:12px;margin-bottom:24px;display:flex;align-items:center;gap:10px}
   .term-title .dots{display:flex;gap:8px}
   .term-title .dots span{width:12px;height:12px;border-radius:50%}
   .term-title .dots span:nth-child(1){background:#f7768e}.term-title .dots span:nth-child(2){background:#e0af68}.term-title .dots span:nth-child(3){background:#9ece6a}
-  .line{display:flex;align-items:center;gap:6px;padding:5px 0;white-space:nowrap;overflow:hidden;font-size:13.5px}
-  .sep{color:#6e738d;opacity:.55;font-weight:300}
-  .model{color:#7dc4e4;font-weight:700}
-  .effort-low{color:#a6da95;font-weight:700}.effort-med{color:#eed49f;font-weight:700}.effort-high{color:#f5a97f;font-weight:700}.effort-xhigh{color:#ed8796;font-weight:700}.effort-ultra{color:#f0c6c6;font-weight:700}
-  .dir{color:#8aadf4}.git{color:#c6a0f6}.skill{color:#f5a97f}
-  .ctx-label{color:#a9b1d6;font-size:13px}.ctx-size{color:#6e738d;font-size:12px}
-  .bar-fill{color:#9ece6a}.bar-uncached{color:#5f8787}
-  .bar-pct{color:#cfd3e8;font-weight:700;font-size:13px}
-  .pct-warn{color:#eed49f}.pct-crit{color:#ed8796}.cost{color:#d7af87;font-size:13px}.limit-track{color:#4e5266}.reset{color:#6e738d;font-size:12px}
-  .cache-label{color:#6e738d;opacity:.55;font-size:12px}.cache-val{color:#9ece6a;font-size:12px}
+  .scroll{overflow-x:auto}
+  .line{display:flex;align-items:center;padding:3px 0;white-space:pre;font-size:13.5px}
+  .tag{color:#565f89;font-size:11px;margin-left:16px}
+  .prompt{border:1px solid #2a2e42;border-radius:6px;padding:8px 10px;margin:6px 0;color:#565f89}
+  /* Plugin band — the hex palette of plugin/hooks/register.tsx */
+  .sep{color:#8a8a8a;opacity:.55}
+  .dir{color:#5f87d7;font-weight:700}.wt{color:#4fa3a3;font-weight:700}.git{color:#9b72cf;font-weight:700}.skill{color:#d98a5f;font-weight:700}
+  .label{color:#8a8a8a}
+  .fill{color:#3fa58a}.unc{color:#3fa58a;opacity:.5}.track{color:#8a8a8a;opacity:.45}.mark{color:#8a8a8a}
+  .warn{color:#c9a227}.warn-unc{color:#c9a227;opacity:.5}.crit{color:#d9534f}
+  .pct{font-weight:700;color:#cfd3e8}.reset{color:#8a8a8a}.cost{color:#b8865b}
+  /* statusLine — index.js 256-color palette */
+  .model{color:#87d7ff;font-weight:700}
+  .eff-low{color:#afd7af;font-weight:700}.eff-medium{color:#ffd787;font-weight:700}.eff-high{color:#ffaf5f;font-weight:700}
+  .eff-xhigh{color:#ff8787;font-weight:700}.eff-ultra{color:#ff5f5f;font-weight:700}.eff-max{color:#ff875f;font-weight:700}
   h2{color:#737aa2;font-size:12px;font-weight:400;margin:28px 0 12px;text-transform:uppercase;letter-spacing:1.5px}
-  .effort-row{display:flex;gap:24px;font-size:13px;margin-bottom:4px}
+  .variant{margin-bottom:10px}.variant-label{color:#565f89;font-size:11px;margin-bottom:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 24px;font-size:13px}
+  .legend small{color:#565f89;font-size:12px}
   .note{color:#565f89;font-size:12px;margin-top:20px;line-height:1.6}
   .note code{color:#a9b1d6;background:#1e2030;padding:1px 6px;border-radius:4px}
   hr{border:0;border-top:1px solid #2a2e42;margin:22px 0}
-  .variant{margin-bottom:10px}.variant-label{color:#565f89;font-size:11px;margin-bottom:4px}
-  </style></head>
+</style></head>
 <body>
 <div class="terminal">
   <div class="term-title"><div class="dots"><span></span><span></span><span></span></div> cclitehud — preview</div>
 
-  <!-- Line 1 -->
-  <div class="line">
-    <span class="model">deepseek-v4-pro</span><span class="sep">·</span>
-    <span class="effort-med">◆&nbsp;medium</span><span class="sep">·</span>
-    <span class="dir">~/Projects</span><span class="sep">·</span>
-    <span class="git">⎇&nbsp;feature/statusline</span><span class="sep">·</span>
-    <span class="skill">✦&nbsp;brainstorming</span>
+  <div class="scroll">
+    <div class="line"><span class="dir">Projects/cclitehud</span><span class="sep"> · </span><span class="git">⎇ main</span><span class="sep"> · </span><span class="skill">✦ brainstorming</span><span class="tag">← plugin, row 1</span></div>
+    <div class="line"><span class="label">ctx 1M </span><span class="fill">━</span><span class="unc">━</span><span class="track">──────</span><span class="mark">•</span><span class="track">─</span><span class="pct"> 23%</span><span class="sep"> · </span><span class="fill">↖ cached 60%</span><span class="sep"> · </span><span class="label">5h </span><span class="fill">━━</span><span class="track">────────</span><span class="pct"> 23%</span><span class="reset"> ↻2h14m</span><span class="sep"> · </span><span class="label">7d </span><span class="warn">━━━━━━━━</span><span class="track">──</span><span class="pct warn"> 78%</span><span class="reset"> ↻3d5h</span><span class="sep"> · </span><span class="cost">⌂ $186.42</span><span class="tag">← plugin, row 2</span></div>
+    <div class="prompt">&gt; _</div>
+    <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-medium">◆ medium</span><span class="tag">← statusLine (terminal only)</span></div>
   </div>
 
-  <!-- Line 2 -->
-  <div class="line">
-    <span class="ctx-label">ctx</span>
-    <span class="ctx-size">1M</span>
-    <span class="bar-fill">━━━━━━━━━</span><span class="bar-uncached">━━━━━</span><span class="limit-track">──────────────────</span>
-    <span class="bar-pct">45%</span>
-    <span class="cache-label">·</span>
-    <span class="cache-val">↖&nbsp;cached&nbsp;60%</span>
-  </div>
-
-  <!-- Line 3 -->
-  <div class="line">
-    <span class="ctx-label">5h</span><span class="bar-fill">━━━</span><span class="limit-track">─────────</span><span class="bar-pct">23%</span><span class="reset">↻2h14m</span><span class="sep">·</span>
-    <span class="ctx-label">7d</span><span class="bar-fill">━━━━━━━</span><span class="limit-track">─────</span><span class="bar-pct">61%</span><span class="reset">↻3d5h</span><span class="sep">·</span>
-    <span class="cost">⌂&nbsp;$186.42</span>
-  </div>
-
-  <h2>Model — raw ID, no hardcoded mapping</h2>
-  <div class="line"><span class="model">deepseek-v4-pro</span> <span style="color:#565f89;font-size:12px">← just the raw model string, works for any model</span></div>
-
-  <h2>Progress bar — thin line glyphs</h2>
-  <div class="effort-row">
-    <span class="bar-fill">━━━━━━</span> <span style="color:#565f89;font-size:12px">cached (fg 115)</span>
-    <span class="bar-uncached">━━━━━━</span> <span style="color:#565f89;font-size:12px">uncached (fg 66)</span>
-    <span class="limit-track">──────</span> <span style="color:#565f89;font-size:12px">remaining (fg 239)</span>
-  </div>
-  <div style="color:#565f89;font-size:12px;margin-top:4px">
-    Line glyphs instead of shade blocks (▓▒░), which fill the whole cell in many fonts and made stacked bars merge
+  <h2>Bars — thin line glyphs</h2>
+  <div class="legend">
+    <span><span class="fill">━━━━━━</span> <small>cached</small></span>
+    <span><span class="unc">━━━━━━</span> <small>uncached (dimmed fill)</small></span>
+    <span><span class="track">──────</span> <small>remaining</small></span>
+    <span><span class="mark">•</span> <small>auto-compact point</small></span>
   </div>
 
   <hr>
 
-  <h2>Variants</h2>
-  <div class="variant">
-    <div class="variant-label">12% used, 90% cached — 1M window</div>
-    <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">1M</span><span class="bar-fill">━━━</span><span class="bar-uncached">━</span><span class="limit-track">────────────────────────────</span>
-      <span class="bar-pct">12%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;90%</span>
+  <h2>Plugin — variants</h2>
+  <div class="scroll">
+    <div class="variant">
+      <div class="variant-label">Context nearing auto-compact (yellow), 5h past 90% (red)</div>
+      <div class="line"><span class="label">ctx 200K </span><span class="warn">━━━━</span><span class="warn-unc">━━━</span><span class="track">─</span><span class="mark">•</span><span class="track">─</span><span class="pct warn"> 66%</span><span class="sep"> · </span><span class="fill">↖ cached 56%</span><span class="sep"> · </span><span class="label">5h </span><span class="crit">━━━━━━━━━</span><span class="track">─</span><span class="pct crit"> 94%</span><span class="reset"> ↻38m</span><span class="sep"> · </span><span class="label">7d </span><span class="fill">━━━━</span><span class="track">──────</span><span class="pct"> 41%</span><span class="reset"> ↻20h</span><span class="sep"> · </span><span class="cost">⌂ $412.80</span></div>
     </div>
-  </div>
-  <div class="variant">
-    <div class="variant-label">85% used, 56% cached — 200K window</div>
-    <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bar-fill">━━━━━━━━━━━━━━━</span><span class="bar-uncached">━━━━━━━━━━━━</span><span class="limit-track">─────</span>
-      <span class="bar-pct">85%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;56%</span>
+    <div class="variant">
+      <div class="variant-label">Inside a git worktree (row 1)</div>
+      <div class="line"><span class="dir">Projects/cclitehud</span><span class="sep"> · </span><span class="wt">⧉ fix-login</span><span class="sep"> · </span><span class="git">⎇ fix-login</span></div>
     </div>
-  </div>
-  <div class="variant">
-    <div class="variant-label">45% used, no cache → all uncached fill, no cache label</div>
-    <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bar-uncached">━━━━━━━━━━━━━━</span><span class="limit-track">──────────────────</span>
-      <span class="bar-pct">45%</span>
+    <div class="variant">
+      <div class="variant-label">API-key login — no usage limits, no weekly cost; auto-compact off — no mark</div>
+      <div class="line"><span class="label">ctx 1M </span><span class="fill">━</span><span class="track">─────────</span><span class="pct"> 12%</span><span class="sep"> · </span><span class="fill">↖ cached 90%</span></div>
     </div>
   </div>
 
-  <hr>
-
-  <h2>Line 3 — Usage limits (subscription logins only)</h2>
-  <div style="color:#565f89;font-size:12px;margin-bottom:12px">
-    Two 12-col thin-line bars (<code style="color:#a9b1d6">━</code> used / <code style="color:#a9b1d6">─</code> left) · <code style="color:#a9b1d6">↻</code> reset countdown · <code style="color:#a9b1d6">$</code> <code style="color:#a9b1d6">⌂</code> local API-equivalent cost of the current 7d window · hidden when <code style="color:#a9b1d6">rate_limits</code> is absent
-  </div>
-  <div class="variant">
-    <div class="variant-label">Warning (≥70%, yellow) and critical (≥90%, red) — bar and percentage</div>
-    <div class="line">
-    <span class="ctx-label">5h</span><span class="bar-fill pct-warn">━━━━━━━━━</span><span class="limit-track">───</span><span class="bar-pct pct-warn">78%</span><span class="reset">↻38m</span><span class="sep">·</span>
-    <span class="ctx-label">7d</span><span class="bar-fill pct-crit">━━━━━━━━━━━</span><span class="limit-track">─</span><span class="bar-pct pct-crit">94%</span><span class="reset">↻20h</span><span class="sep">·</span>
-    <span class="cost">⌂&nbsp;$412.80</span>
-  </div>
-  </div>
-  <div class="variant">
-    <div class="variant-label">Only 5h window reported (no weekly cost)</div>
-    <div class="line">
-    <span class="ctx-label">5h</span><span class="bar-fill">━━━━━</span><span class="limit-track">───────</span><span class="bar-pct">42%</span><span class="reset">↻38m</span>
-  </div>
+  <h2>statusLine — effort levels</h2>
+  <div class="scroll">
+    <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-low">◆ low</span></div>
+    <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-high">◆ high</span></div>
+    <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-xhigh">◆ xhigh</span></div>
+    <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-max">◆ max</span></div>
   </div>
 
   <hr>
   <div class="note">
-    <strong>CLI:</strong> <code>node ~/cclitehud/index.js --preview</code> &nbsp;|&nbsp;
-    <strong>Config:</strong> <code>~/.claude/settings.json</code> → statusLine
+    <strong>Plugin:</strong> <code>plugin/</code>, drawn above the prompt in the terminal and the desktop Code tab &nbsp;|&nbsp;
+    <strong>statusLine:</strong> <code>index.js</code>, terminal only &nbsp;|&nbsp;
+    <strong>Setup:</strong> <code>node ~/cclitehud/index.js --install</code>
   </div>
 </div>
 </body>

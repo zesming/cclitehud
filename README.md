@@ -1,57 +1,49 @@
 # cclitehud
 
-A minimal status bar for [Claude Code](https://claude.ai/code). Zero dependencies, pure Node.js.
+A minimal HUD for [Claude Code](https://claude.ai/code), in the terminal and the desktop app's Code tab. Zero npm dependencies.
 
-Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with CJK-aware width calculation, cache-hit visualization, and subscription usage limits.
+Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with cache-hit visualization, an auto-compact mark, subscription usage limits and the week's API-equivalent cost.
 
 ```
-deepseek-v4-pro · ◆ max · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
-ctx 1M ━━━━━━━━━━━━━━────────────────── 45% · ↖ cached 60%
-5h ━━━───────── 23% ↻2h14m · 7d ━━━━━━━───── 61% ↻3d5h · ⌂ $186.42
+Projects/cclitehud · ⎇ main · ✦ brainstorming                                          ← plugin (above the prompt)
+ctx 1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ⌂ $186.42
+> _                                                                                      ← prompt
+claude-opus-5-5 · ◆ medium                                                               ← statusLine (terminal only)
 ```
 
-> Run `node index.js --preview` to see all effort levels and usage variants.
+It comes in two parts:
 
-In the Claude desktop app's Code tab, an optional [desktop plugin](#desktop-app-code-tab) draws the same bars above the prompt.
+| Part | Where it draws | What it shows |
+|------|----------------|---------------|
+| **Plugin** (`plugin/`) | Above the prompt, in the terminal **and** the desktop Code tab | Directory, worktree, branch, recent skill; context and usage-limit bars; weekly cost |
+| **statusLine** (`index.js`) | Below the prompt, terminal only | Model and thinking effort |
+
+The plugin reads the session through the plugin API (plus `git` for the branch and `node index.js` for the weekly cost). That API shows the thinking effort only on a running turn, not the session's setting, so the terminal keeps a small statusLine for model and effort. The desktop app already shows both below its prompt.
 
 ## What it shows
 
-**Line 1** — Session context
-- **Model** — raw model ID (`deepseek-v4-pro`, `claude-sonnet-4-6`, etc.)
-- **Thinking effort** — `◆` icon + label, color-coded by level: `low` `medium` `high` `xhigh` `ultra` `max`
-- **Current directory** — last 2 path segments, home-relative (`~/Projects`)
-- **Git branch** — auto-detected with `⎇`, hidden outside repos
-- **Recent skill** — last skill / slash command used, with `✦`. Per-session isolation. Adaptive width: full name shown unless terminal is too narrow.
+**Plugin, row 1** — where you are, in bold (in the terminal the band keeps a blank row above it, matching the one Claude Code leaves below it)
+- **Directory** — last 2 path segments, home-relative (`Projects/cclitehud`)
+- **Worktree** — inside a git worktree the main project's path comes first, then `⧉` and the worktree's name
+- **Git branch** — `⎇`, hidden outside repos
+- **Recent skill** — last skill or slash command used, with `✦`
 
-**Line 2** — Context window
-- **Window size** — `200K` / `1M` auto-detected from model ID
-- **Progress bar** — thin-line bar, same style as the usage-limit bars:
-  - bright `━` = cached tokens
-  - dim `━` = uncached tokens
-  - `─` = remaining space
-- **Usage %** — total context window usage
-- **Cached %** — cache hit rate (cache_read ÷ actual_context × 100)
+**Plugin, row 2** — how full things are
+- **Context bar** — `ctx` + window size, then a 10-cell thin-line bar: bright `━` cached tokens, dim `━` uncached, `─` remaining
+- **Auto-compact mark** — a gray `•` in the context bar where auto-compaction kicks in; follows `/autocompact`, hidden when auto-compact is off
+- **Cached %** — cache hit rate of the last turn (cache_read ÷ all input tokens)
+- **5h / 7d** — subscription usage-limit bars with a `↻` reset countdown (`38m`, `2h14m`, `3d5h`); absent on API-key logins
+- **Threshold colors** — a bar and its percentage turn yellow at ≥70% and red at ≥90%. The context percentage is of the full window, but its color is judged against the auto-compact point (the full window when auto-compact is off), so it warns before compaction
+- **Weekly cost** — `⌂ $186.42`, where `⌂` means local: what this machine's Claude Code usage in the current 7d limit window would cost at API list prices. Computed from the transcripts under `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` when set) (subagents included, non-Claude models skipped), deduplicated per response, refreshed at most once a minute. It counts this machine only, and appears once the first refresh has run
 
-**Line 3** — Usage limits (Claude.ai subscription logins only)
-- **5h / 7d** — rolling 5-hour and weekly limit usage, each with a compact thin-line bar (`━` used, `─` remaining) so it stays visually separate from the ctx bar above
-- **Reset countdown** — `↻` time until the window resets (`38m`, `2h14m`, `3d5h`)
-- **Threshold colors** — bar and percentage turn yellow at ≥70% and red at ≥90%
-- **Weekly API-equivalent cost** — `⌂ $186.42` at the end (`⌂` = local): what this machine's Claude Code usage in the current 7d window would cost at API list prices. Computed from the transcripts under `~/.claude/projects` (subagents included, non-Claude models skipped) by a background refresh at most once a minute, so it covers only this machine and appears one refresh after the first render
-- Hidden entirely when `rate_limits` is absent (API key / third-party proxy, or before the first API response); a window without data is omitted
-
-## Features beyond ccstatusline
-
-- **Cache-hit visualization** — the context bar splits cached vs. uncached tokens with two shades of the same color on a thin-line bar.
-- **Usage limits** — 5h / weekly subscription limits with reset countdowns, warning colors, and the week's API-equivalent cost.
-- **CJK-aware width** — Skill name truncation correctly accounts for double-width CJK characters.
-- **Safe by default** — Session IDs are sanitized before being used in file paths; model, branch, and skill names are stripped of terminal control sequences.
-- **Self-cleaning** — Per-session skill files untouched for 7 days are pruned automatically.
+**statusLine** — the model
+- **Model** — raw model ID (`claude-opus-5-5`, `deepseek-v4-pro`, …)
+- **Thinking effort** — `◆` + level, color-coded: `low` `medium` `high` `xhigh` `ultra` `max`
 
 ## Requirements
 
-- **Node.js** ≥ 14
-- **Claude Code**
-- No npm dependencies
+- **Node.js** ≥ 14 (the plugin runs `node` for the weekly cost: found on `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`)
+- **Claude Code** with plugin support (the desktop app's Code tab runs the same Claude Code)
 
 ## Installation
 
@@ -63,8 +55,6 @@ Paste this into Claude Code:
 Read https://github.com/zesming/cclitehud/blob/main/README.md and install & configure it for me
 ```
 
-Claude Code will read the instructions and set everything up for you.
-
 ### Manual install
 
 #### 1. Clone
@@ -73,220 +63,112 @@ Claude Code will read the instructions and set everything up for you.
 git clone https://github.com/zesming/cclitehud.git ~/cclitehud
 ```
 
-#### 2. Verify
+Keep the repository in one piece: the plugin calls `../index.js` for the weekly cost.
 
-```bash
-node ~/cclitehud/index.js --preview
-```
+#### 2. Configure Claude Code
 
-You should see sample output with all effort levels, progress bars, usage limits, and a mock skill.
-
-#### 3. Configure Claude Code
-
-The easiest way is to let the script configure itself (merges into existing settings, safe to re-run):
+Let the script configure itself (merges into existing settings, safe to re-run):
 
 ```bash
 node ~/cclitehud/index.js --install
 ```
 
-Or add these blocks manually to `~/.claude/settings.json`:
+It sets the statusLine, adds the plugin folder to `env.CLAUDE_CODE_PLUGIN_DIRS` (keeping any folders already there), removes the skill hooks an older cclitehud installed, replaces the pre-rename `desktop-plugin` folder in `CLAUDE_CODE_PLUGIN_DIRS`, and keeps the original file as `settings.json.bak` (made on the first run only; the file's permissions and any symlink are kept). It uses `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. A `settings.json` that is not plain JSON (comments, trailing commas) is left untouched: the command stops and says why.
+
+**Upgrading from 1.x** — the three-line statusline, or the `desktop-plugin/` folder: pull, then run `--install` once more. Until then the terminal shows only `model · effort` with no band above the prompt, and the desktop loses its band (the folder is now `plugin/`).
+
+Or edit `~/.claude/settings.json` by hand (merge with existing keys rather than replacing the file):
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "node /Users/YOUR_USER/cclitehud/index.js",
-    "refreshInterval": 10
+    "command": "node /Users/YOUR_USER/cclitehud/index.js"
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node /Users/YOUR_USER/cclitehud/index.js --hook"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node /Users/YOUR_USER/cclitehud/index.js --hook"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-> Replace `/Users/YOUR_USER/` with your actual home path. Merge with any existing `statusLine` and `hooks` keys — don't overwrite the whole file.
-
-#### 4. Restart Claude Code
-
-The new statusline takes effect on next launch.
-
-## Desktop app (Code tab)
-
-The terminal statusline above stays as it is. For the Claude desktop app's Code tab, `desktop-plugin/` is a Claude Code plugin that draws a compact two-row band above the prompt:
-
-```
-Projects/cclitehud · ⧉ fix-login · ⎇ fix-login · ✦ brainstorming
-ctx 1M ━━━─────│─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ⌂ $186.42
-```
-
-- **Row 1** — directory, git branch, recent skill / slash command. Inside a git worktree, the main project's path comes first, then `⧉` and the worktree's name.
-- **Row 2** — context, 5h and 7d bars, all the same width (10), in the terminal's thin-line style (the context bar's uncached part is the dimmed fill color), then the local weekly API-equivalent cost `⌂ $…`
-- **Auto-compact mark** — a faint `│` in the context bar where auto-compaction kicks in (hidden when auto-compact is off)
-- **Bar colors** — the same thresholds as the terminal's usage-limit percentages (`limitWarnPct` 70, `limitCritPct` 90): a bar and its percentage turn yellow at ≥70% and red at ≥90%. For the context bar the percentage is measured against the auto-compact point (against the full window when auto-compact is off), so it warns before compaction.
-- **Model and effort are omitted** — the desktop already shows them below the prompt
-- **Terminal untouched** — the plugin draws only on the desktop surface, so a CLI session keeps the original three-line statusline and shows no duplicate
-
-It reads everything from the session directly (no hooks in `settings.json`). The one exception is the weekly cost: after each measurement the plugin runs `node ../index.js --refresh-cost` (at most once a minute) and shows the same `~/.cache/cclitehud/weekly-cost.json` the terminal statusline uses, so keep `desktop-plugin/` inside the repo checkout and `node` installed (looked up on `PATH`, then `/opt/homebrew/bin` and `/usr/local/bin`). Colors are mid-tone hex values readable in both light and dark themes.
-
-### Install
-
-Point `CLAUDE_CODE_PLUGIN_DIRS` at the folder in the `env` block of `~/.claude/settings.json` (merge with any existing `env` keys):
-
-```json
-{
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "~/cclitehud/desktop-plugin"
+    "CLAUDE_CODE_PLUGIN_DIRS": "/Users/YOUR_USER/cclitehud/plugin"
   }
 }
 ```
 
-Then restart the desktop app. To try it in a single session instead, run `claude --plugin-dir ~/cclitehud/desktop-plugin`.
+`CLAUDE_CODE_PLUGIN_DIRS` takes several folders separated by `:` (`;` on Windows), and is read from `~/.claude/settings.json` only, never from a project's settings. Upgrading from 1.x by hand: also delete the `index.js --hook` entries under `hooks.PreToolUse` and `hooks.UserPromptSubmit`, and change a `…/cclitehud/desktop-plugin` entry in `CLAUDE_CODE_PLUGIN_DIRS` to `…/cclitehud/plugin`.
 
-Check the plugin with:
+#### 3. Restart
 
-```bash
-claude plugin validate ~/cclitehud/desktop-plugin
-```
+Restart Claude Code and the desktop app. To try the plugin in one session first: `claude --plugin-dir ~/cclitehud/plugin`.
 
-```bash
-claude plugin test ~/cclitehud/desktop-plugin
-```
-
-Edits take effect in sessions started after the change.
-
-### Differences from the terminal statusline
-
-- **Cache hit rate** is computed from the whole last turn's token totals (all requests in the turn), not only the last request, so it can differ slightly.
-- **Bar widths and colors** live in `CONFIG` and `C` at the top of `desktop-plugin/hooks/register.tsx`.
-
-## How skill tracking works
-
-Follows the same pattern as [ccstatusline](https://github.com/sirmalloc/ccstatusline):
-
-```
-Skill call or /slash command
-  → PreToolUse / UserPromptSubmit hook fires
-  → node index.js --hook
-  → reads stdin: {session_id, hook_event_name, tool_input}
-  → appends to ~/.cache/cclitehud/skills-<sessionId>.jsonl
-
-Statusline render (every 10s)
-  → stdin = StatusJSON {session_id, ...}
-  → reads skills-<sessionId>.jsonl for current session
-  → displays last skill: ✦ skillname
-```
-
-Each Claude Code session gets its own JSONL file keyed by `session_id` — skills from other sessions don't leak across.
-
-## Configuration
-
-Edit `index.js` — the `CONFIG` and `C` objects at the top:
-
-```js
-const CONFIG = {
-  barWidth: 32,       // context bar character width
-  limitBarWidth: 12,  // width of each usage-limit bar (line 3)
-  limitWarnPct: 70,   // usage-limit bar + % turn yellow at this level
-  limitCritPct: 90,   // usage-limit bar + % turn red at this level
-  maxDirDepth: 2,     // directory path segments to show
-};
-
-const C = {
-  model: 117,         // 256-color code for model name
-  effort: { low: 151, medium: 222, high: 215, xhigh: 210, ultra: 203, max: 209 },
-  dir: 111,           // directory color
-  git: 183,           // git branch color
-  skill: 216,         // skill name color
-  barFilled: 115,     // bar fill (cached part of the ctx bar)
-  barUncached: 66,    // uncached part of the ctx bar
-  barTrack: 239,      // remaining-space track
-  pctWarn: 221,       // usage-limit warning color
-  pctCrit: 203,       // usage-limit critical color
-  cost: 180,          // weekly API-equivalent cost color
-};
-
-API prices used for the weekly cost live in the `PRICING` table in `index.js`.
-```
-
-Color codes are ANSI 256-color palette values (0–255).
-
-## Debug mode
-
-If the progress bars are behaving unexpectedly (e.g., jumping values, missing usage limits), you can enable debug logging to capture the raw StatusJSON payloads:
-
-1. Edit `~/.claude/settings.json` and add `--debug` to the statusLine command:
-   ```json
-   "command": "node /Users/YOUR_USER/cclitehud/index.js --debug"
-   ```
-2. Use Claude Code normally — raw payloads are appended to `~/.cache/cclitehud/debug.jsonl`
-3. Inspect the log to see what `context_window` and `rate_limits` values Claude Code is reporting
-
-Remove `--debug` when done.
-
-## Doctor mode
-
-Run a comprehensive self-diagnostic to verify everything is working correctly:
+#### 4. Check
 
 ```bash
 node ~/cclitehud/index.js --doctor
 ```
 
-This checks 13 aspects of the installation:
+## Configuration
+
+**Plugin** — `CONFIG` and `C` at the top of `plugin/hooks/register.tsx`:
+
+```ts
+const CONFIG = {
+  barWidth: 10,       // context bar cells
+  limitBarWidth: 10,  // 5h / 7d bar cells
+  limitWarnPct: 70,   // bar + % turn yellow at this level
+  limitCritPct: 90,   // bar + % turn red at this level
+  maxDirDepth: 2,     // directory path segments to show
+}
+```
+
+Colors in `C` are mid-tone hex values readable on light and dark themes.
+
+**statusLine** — the `C` palette at the top of `index.js` (ANSI 256-color codes, 0–255) for the model and effort colors.
+
+**Weekly cost prices** — the `PRICING` table in `index.js` ($ per million tokens: input, output, cache read; cache writes are 1.25× input for 5 minutes, 2× for 1 hour; fast mode 2×).
+
+## Commands
+
+| Command | What it does |
+|---------|--------------|
+| `node index.js --install` | Configure the statusLine and the plugin in `~/.claude/settings.json` |
+| `node index.js --doctor` | Check the installation (below) |
+| `node index.js --preview` | Show the statusLine for every effort level |
+| `node index.js --refresh-cost <windowStart>` | Recompute the weekly cost cache (the plugin runs this) |
+| `claude plugin validate plugin` | Validate the plugin |
+| `claude plugin test plugin` | Run the plugin's tests |
+
+### Doctor
 
 | Check | What it verifies |
-|-------|-----------------|
-| Node.js version | ≥ 14 required |
-| index.js readable | File integrity |
+|-------|------------------|
+| Node.js version | ≥ 14 |
 | Cache directory | `~/.cache/cclitehud/` is readable and writable |
-| Git available | `git` is in PATH |
-| Git branch detection | Can detect branch name from current directory |
-| statusLine config | `~/.claude/settings.json` points to this file |
-| PreToolUse Skill hook | Hook configured with correct command |
-| UserPromptSubmit hook | Hook configured with correct command |
-| Skill tracking | Write + read round-trip to JSONL |
-| Render test | Full three-line render with mock data (displayed) |
-| ANSI 256-color | Terminal support detection |
-| CJK visibleLen | Chinese/Japanese/Korean character width calculation |
-| Cache data | Existing skill file count |
+| Plugin folder | `plugin/` has its manifest and hooks module |
+| settings.json | `~/.claude/settings.json` reads as a JSON object (or does not exist yet) |
+| statusLine config | `~/.claude/settings.json` points to this `index.js` |
+| Plugin config | `env.CLAUDE_CODE_PLUGIN_DIRS` includes the plugin folder |
+| Legacy hooks | No leftover `index.js --hook` entries from an older install |
+| Weekly cost scan | Scans the last 7 days of transcripts and prints the total |
+| Render test | Renders the statusLine |
 
-Exit code is `0` when all checks pass, `1` if any check fails — useful for scripting.
+Exit code is `0` when nothing fails, `1` otherwise.
+
+### Debug
+
+Add `--debug` to the statusLine command to append the `model` and `effort` fields of each StatusJSON payload to `~/.cache/cclitehud/debug.jsonl`. For the plugin, run `claude --debug`: a failing hook is logged with its reason.
 
 ## Files
 
 ```
 cclitehud/
-├── index.js          # Main script (single file, zero dependencies)
-├── package.json      # Metadata
-├── preview.html      # Browser-based visual preview
-├── desktop-plugin/   # Claude Code plugin for the desktop Code tab
+├── index.js          # statusLine, weekly cost, --install / --doctor
+├── package.json
+├── preview.html      # Browser preview of the band and the statusLine
+├── plugin/           # The band above the prompt (terminal + desktop)
 │   ├── .claude-plugin/plugin.json
 │   ├── hooks/hooks.json
-│   ├── hooks/register.tsx   # The band (rendering + data)
-│   ├── tests/band.test.tsx  # `claude plugin test desktop-plugin`
+│   ├── hooks/register.tsx   # Rendering + data
+│   ├── tests/band.test.tsx
 │   └── types/index.d.ts     # Plugin state contract
-├── LICENSE           # MIT License
-├── .gitignore
-└── README.md         # This file
+├── LICENSE
+└── README.md
 ```
 
 ## Acknowledgments

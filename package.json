@@ -1,14 +1,21 @@
 {
   "name": "cclitehud",
-  "version": "1.0.0",
-  "description": "A custom Claude Code statusline with context window and usage limit progress bars",
-  "main": "index.js",
+  "version": "2.0.0",
+  "private": true,
+  "description": "A minimal Claude Code HUD: a plugin band with context and usage-limit bars plus weekly API-equivalent cost, and a model · effort statusline",
   "bin": {
     "cclitehud": "./index.js"
   },
   "scripts": {
     "preview": "node index.js --preview"
   },
-  "keywords": ["claude-code", "statusline"],
+  "engines": {
+    "node": ">=14"
+  },
+  "keywords": [
+    "claude-code",
+    "statusline",
+    "plugin"
+  ],
   "license": "MIT"
 }

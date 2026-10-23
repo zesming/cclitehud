@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-// cclitehud for the desktop Code tab: two rows above the prompt, dir,
-// worktree, branch and skill on the first, the context and usage-limit bars
-// on the second, ending with the local API-equivalent cost of the current
-// 7d window. Model and effort are left out because the desktop already
-// shows them. The terminal keeps its real statusLine, so this band only
-// draws on non-terminal surfaces.
+// cclitehud band: two rows above the prompt on every surface (terminal and
+// desktop Code tab alike), dir, worktree, branch and skill on the first, the
+// context and usage-limit bars on the second, ending with the local
+// API-equivalent cost of the current 7d window. Model and effort are left
+// out: the desktop shows them itself, and in the terminal index.js draws
+// them as the statusLine below the prompt.
 
 const skill = atom({ plugin: 'cclitehud', key: 'skill' } as const, null)
 const cachePct = atom({ plugin: 'cclitehud', key: 'cachePct' } as const, null)
@@ -20,8 +20,7 @@ const CONFIG = {
   maxDirDepth: 2,
 }
 
-// Mid-tone hex versions of index.js's 256-color palette, readable on both
-// light and dark desktop themes.
+// Mid-tone hex colors, readable on both light and dark themes.
 const C = {
   dir: '#5f87d7',
   git: '#9b72cf',
@@ -35,21 +34,23 @@ const C = {
   cost: '#b8865b',
 }
 
-// Thin line glyphs, as in index.js: cached is the full fill color, uncached
-// the same color dimmed, the remaining track a light line
+// Thin line glyphs: cached is the full fill color, uncached the same color
+// dimmed, the remaining track a light line
 const BAR_FILL = '━'
 const BAR_TRACK = '─'
-const COMPACT_MARK = '│'
+const COMPACT_MARK = '•' // auto-compact point, gray, on top of the bar
 const WORKTREE_ICON = '⧉'
 const LOCAL_ICON = '⌂'
 
-// Weekly cost: index.js --refresh-cost scans the local transcripts and writes
-// ~/.cache/cclitehud/weekly-cost.json, the cache the terminal statusline
-// shares; the band reads it and asks for a refresh after each measurement
+// Weekly cost: `index.js --refresh-cost <windowStart>` scans the local
+// transcripts and writes ~/.cache/cclitehud/weekly-cost.json keyed by that
+// window start; the band reads it and asks for a refresh after each
+// measurement
 const COST_TTL_MS = 60_000
+const COST_FAIL_BACKOFF_MS = 10 * 60_000 // after a scan that failed or timed out
 const WEEK_SECS = 7 * 86400
 const NODE_CANDIDATES = ['node', '/opt/homebrew/bin/node', '/usr/local/bin/node']
-const costState = { lastRefresh: 0, node: null as string | null }
+const costState = { nextRefresh: -Infinity, node: null as string | null }
 type WeeklyCost = { windowStart: number; usd: number; computedAt: number }
 
 const GIT_TTL = 5000
@@ -117,7 +118,7 @@ function formatUsd(usd: number) {
   return '$' + usd.toFixed(2)
 }
 
-// Same window key as index.js: the 7d reset minus a week, to the minute
+// The cache's window key: the 7d reset minus a week, to the minute
 function windowStartOf(resetsAt: string | undefined) {
   const t = resetsAt ? Date.parse(resetsAt) / 1000 : NaN
   if (!Number.isFinite(t) || t <= 0) return null
@@ -135,25 +136,39 @@ async function readWeeklyCost($: EngineInterface, windowStart: number): Promise<
   }
 }
 
-// Runs index.js --refresh-cost when the cache is stale; true when it ran
-async function refreshWeeklyCost($: EngineInterface, windowStart: number) {
-  const now = await $.clock.now()
-  if (now - costState.lastRefresh < COST_TTL_MS) return false
-  const cached = await readWeeklyCost($, windowStart)
-  if (cached && now - cached.computedAt < COST_TTL_MS) return false
-  costState.lastRefresh = now
-  const script = $.plugin.root.replace(/\/+$/, '') + '/../index.js'
-  for (const node of costState.node ? [costState.node] : NODE_CANDIDATES) {
+// The first node candidate that starts (a quick `--version`), remembered
+async function findNode($: EngineInterface) {
+  if (costState.node) return costState.node
+  for (const node of NODE_CANDIDATES) {
     try {
-      const r = await $.process.run([node, script, '--refresh-cost', String(windowStart)], { timeoutMs: 30_000 })
-      if (r.exitCode === 0) {
-        costState.node = node
-        return true
-      }
+      const r = await $.process.run([node, '--version'], { timeoutMs: 5_000 })
+      if (r.exitCode === 0) return (costState.node = node)
     } catch {
       // not on PATH here — try the next candidate
     }
   }
+  return null
+}
+
+// Runs index.js --refresh-cost when the cache is stale; true when it ran. A
+// scan that fails or times out is not retried with another node, and waits
+// out a longer backoff so a huge transcript folder is not rescanned each turn
+async function refreshWeeklyCost($: EngineInterface, windowStart: number) {
+  const now = await $.clock.now()
+  if (now < costState.nextRefresh) return false
+  const cached = await readWeeklyCost($, windowStart)
+  if (cached && now - cached.computedAt < COST_TTL_MS) return false
+  costState.nextRefresh = now + COST_TTL_MS
+  const node = await findNode($)
+  if (!node) return false
+  const script = $.plugin.root.replace(/\/+$/, '') + '/../index.js'
+  try {
+    const r = await $.process.run([node, script, '--refresh-cost', String(windowStart)], { timeoutMs: 30_000 })
+    if (r.exitCode === 0) return true
+  } catch {
+    // timed out
+  }
+  costState.nextRefresh = now + COST_FAIL_BACKOFF_MS
   return false
 }
 
@@ -243,12 +258,12 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A slash command, aliases resolved; a failure here never holds up the prompt
   on('prompt.submit', async ($, e, next) => {
-    const m = /^\/([a-zA-Z0-9_:-]+)(?:\s|$)/.exec(e.text)
-    // Never hold up the prompt over a display-only value
-    if (m) await update($, skill, () => m[1]).catch(() => undefined)
+    const name = e.command?.name
+    if (name) await update($, skill, () => name).catch(() => undefined)
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {
     compactCache.window = 0
@@ -262,7 +277,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.surface === 'terminal' || e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey) return next(e)
 
     await read($, tick)
     const [cwd, usage, lastSkill, cached] = await Promise.all([
@@ -286,7 +301,7 @@ export const register: Register = on => {
       </Text>
     )
 
-    // A bar as runs of same-kind cells: uncached and the mark dimmed apart
+    // A bar as runs of same-kind cells: uncached dimmed, the mark in gray
     const renderBar = (k: string, cells: Cell[], fill: string) => {
       const runs: { kind: Cell; text: string }[] = []
       for (const c of cells) {
@@ -300,7 +315,7 @@ export const register: Register = on => {
             {r.text}
           </Text>
         ) : r.kind === 'mark' ? (
-          <Text key={k + i} color={C.separator} dimColor>
+          <Text key={k + i} color={C.separator}>
             {r.text}
           </Text>
         ) : (
@@ -311,28 +326,28 @@ export const register: Register = on => {
       )
     }
 
-    // [main project · ⧉ worktree | dir] · branch · skill
+    // [main project · ⧉ worktree | dir] · branch · skill, in bold
     const mainRoot = git?.mainRoot ?? null
     const worktree = git?.worktree ?? null
     const line1 = mainRoot && worktree
       ? [
-          <Text key="dir" color={C.dir}>
+          <Text key="dir" bold color={C.dir}>
             {shortPath(mainRoot, homeOf(mainRoot))}
           </Text>,
           dot('dw'),
-          <Text key="wt" color={C.worktree}>
+          <Text key="wt" bold color={C.worktree}>
             {WORKTREE_ICON + ' ' + basename(worktree)}
           </Text>,
         ]
       : [
-          <Text key="dir" color={C.dir}>
+          <Text key="dir" bold color={C.dir}>
             {shortPath(cwd, homeOf(cwd))}
           </Text>,
         ]
     if (branch) {
       line1.push(
         dot('d3'),
-        <Text key="git" color={C.git}>
+        <Text key="git" bold color={C.git}>
           {'⎇ ' + branch}
         </Text>,
       )
@@ -340,7 +355,7 @@ export const register: Register = on => {
     if (lastSkill) {
       line1.push(
         dot('d4'),
-        <Text key="skill" color={C.skill}>
+        <Text key="skill" bold color={C.skill}>
           {'✦ ' + lastSkill}
         </Text>,
       )
@@ -353,67 +368,84 @@ export const register: Register = on => {
     const markAt = threshold ? Math.min(CONFIG.barWidth - 1, Math.floor((threshold / ctx.window) * CONFIG.barWidth)) : null
     const nearPct = threshold && ctx.tokens !== undefined ? (ctx.tokens / threshold) * 100 : used
     const ctxColor = pctColor(nearPct)
-    const line2 = [
-      <Text key="label" color={C.label}>
-        {'ctx ' + formatSize(ctx.window) + ' '}
-      </Text>,
-      ...renderBar('ctx', barCells(used, cached ?? 0, CONFIG.barWidth, markAt), ctxColor),
-      <Text key="pct" bold color={ctxColor === C.barFilled ? undefined : ctxColor}>
-        {' ' + used.toFixed(0) + '%'}
-      </Text>,
+    // Row 2 as segments that wrap whole: a narrow terminal breaks the row
+    // between segments, never inside a bar
+    const segments: { key: string; parts: RenderChildren[] }[] = [
+      {
+        key: 'ctx',
+        parts: [
+          <Text key="label" color={C.label}>
+            {'ctx ' + formatSize(ctx.window) + ' '}
+          </Text>,
+          ...renderBar('ctx', barCells(used, cached ?? 0, CONFIG.barWidth, markAt), ctxColor),
+          <Text key="pct" bold color={ctxColor === C.barFilled ? undefined : ctxColor}>
+            {' ' + used.toFixed(0) + '%'}
+          </Text>,
+        ],
+      },
     ]
     if (cached !== null && cached > 0.5) {
-      line2.push(
-        dot('d5'),
-        <Text key="cached" color={C.barFilled}>
-          {'↖ cached ' + cached.toFixed(0) + '%'}
-        </Text>,
-      )
+      segments.push({
+        key: 'cached',
+        parts: [
+          <Text key="cached" color={C.barFilled}>
+            {'↖ cached ' + cached.toFixed(0) + '%'}
+          </Text>,
+        ],
+      })
     }
 
     // 5h / 7d limits (subscription logins only)
     const labels: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
-    const line3 = usage.rateLimits
-      .filter(w => labels[w.kind])
-      .flatMap((w, i) => {
-        const pct = clamp(w.percentUsed)
-        const fill = pctColor(pct)
-        const cd = countdown(w.resetsAt, now)
-        const parts = [
-          <Text key={w.kind + 'l'} color={C.label}>
-            {labels[w.kind] + ' '}
-          </Text>,
-          ...renderBar(w.kind, barCells(pct, 100, CONFIG.limitBarWidth, null), fill),
-          <Text key={w.kind + 'p'} bold color={fill === C.barFilled ? undefined : fill}>
-            {' ' + pct.toFixed(0) + '%'}
-          </Text>,
-        ]
-        if (cd) {
-          parts.push(
-            <Text key={w.kind + 'c'} color={C.separator}>
-              {' ↻' + cd}
-            </Text>,
-          )
-        }
-        return i > 0 ? [dot('d6' + i), ...parts] : parts
-      })
-    if (line3.length > 0 && weekly) {
-      line3.push(
-        dot('d7'),
-        <Text key="cost" color={C.cost}>
-          {LOCAL_ICON + ' ' + formatUsd(weekly.usd)}
+    for (const w of usage.rateLimits) {
+      const label = labels[w.kind]
+      if (!label) continue
+      const pct = clamp(w.percentUsed)
+      const fill = pctColor(pct)
+      const cd = countdown(w.resetsAt, now)
+      const parts = [
+        <Text key={w.kind + 'l'} color={C.label}>
+          {label + ' '}
         </Text>,
-      )
+        ...renderBar(w.kind, barCells(pct, 100, CONFIG.limitBarWidth, null), fill),
+        <Text key={w.kind + 'p'} bold color={fill === C.barFilled ? undefined : fill}>
+          {' ' + pct.toFixed(0) + '%'}
+        </Text>,
+      ]
+      if (cd) {
+        parts.push(
+          <Text key={w.kind + 'c'} color={C.separator}>
+            {' ↻' + cd}
+          </Text>,
+        )
+      }
+      segments.push({ key: w.kind, parts })
+    }
+    if (usage.rateLimits.some(w => labels[w.kind]) && weekly) {
+      segments.push({
+        key: 'cost',
+        parts: [
+          <Text key="cost" color={C.cost}>
+            {LOCAL_ICON + ' ' + formatUsd(weekly.usd)}
+          </Text>,
+        ],
+      })
     }
 
+    // The terminal leaves a blank row between the band and the prompt box; a
+    // matching row above keeps the band off the transcript's last line
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" marginTop={e.surface === 'terminal' ? 1 : 0}>
         <Box key="l1" flexDirection="row" flexWrap="wrap">
           {line1}
         </Box>
         <Box key="l2" flexDirection="row" flexWrap="wrap">
-          {line2}
-          {line3.length > 0 ? [dot('s2'), ...line3] : null}
+          {segments.map((seg, i) => (
+            <Box key={seg.key} flexDirection="row">
+              {i > 0 ? dot('d' + seg.key) : null}
+              {seg.parts}
+            </Box>
+          ))}
         </Box>
       </Box>
     )
