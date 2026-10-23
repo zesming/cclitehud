@@ -16,11 +16,9 @@
   .effort-low{color:#a6da95;font-weight:700}.effort-med{color:#eed49f;font-weight:700}.effort-high{color:#f5a97f;font-weight:700}.effort-xhigh{color:#ed8796;font-weight:700}.effort-ultra{color:#f0c6c6;font-weight:700}
   .dir{color:#8aadf4}.git{color:#c6a0f6}.skill{color:#f5a97f}
   .ctx-label{color:#a9b1d6;font-size:13px}.ctx-size{color:#6e738d;font-size:12px}
-  .bracket{color:#6e738d}
-  .bar-fill{color:#9ece6a}
-  .bar-empty{color:#2f3349;font-size:12px}
+  .bar-fill{color:#9ece6a}.bar-uncached{color:#5f8787}
   .bar-pct{color:#cfd3e8;font-weight:700;font-size:13px}
-  .pct-warn{color:#eed49f}.pct-crit{color:#ed8796}.reset{color:#6e738d;font-size:12px}
+  .pct-warn{color:#eed49f}.pct-crit{color:#ed8796}.cost{color:#d7af87;font-size:13px}.limit-track{color:#4e5266}.reset{color:#6e738d;font-size:12px}
   .cache-label{color:#6e738d;opacity:.55;font-size:12px}.cache-val{color:#9ece6a;font-size:12px}
   h2{color:#737aa2;font-size:12px;font-weight:400;margin:28px 0 12px;text-transform:uppercase;letter-spacing:1.5px}
   .effort-row{display:flex;gap:24px;font-size:13px;margin-bottom:4px}
@@ -28,9 +26,7 @@
   .note code{color:#a9b1d6;background:#1e2030;padding:1px 6px;border-radius:4px}
   hr{border:0;border-top:1px solid #2a2e42;margin:22px 0}
   .variant{margin-bottom:10px}.variant-label{color:#565f89;font-size:11px;margin-bottom:4px}
-  .diagram{background:#1e2030;border-radius:6px;padding:14px 18px;font-size:12px;line-height:1.8;margin-top:8px}
-  .diagram .c{color:#9ece6a}.diagram .u{color:#7ab8a0}.diagram .e{color:#4a4f6a}
-</style></head>
+  </style></head>
 <body>
 <div class="terminal">
   <div class="term-title"><div class="dots"><span></span><span></span><span></span></div> cclitehud — preview</div>
@@ -48,9 +44,7 @@
   <div class="line">
     <span class="ctx-label">ctx</span>
     <span class="ctx-size">1M</span>
-    <span class="bracket">[</span>
-    <span class="bar-fill">▓▓▓▓▓▓▓▓▓▒▒▒▒▒</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░</span>
-    <span class="bracket">]</span>
+    <span class="bar-fill">━━━━━━━━━</span><span class="bar-uncached">━━━━━</span><span class="limit-track">──────────────────</span>
     <span class="bar-pct">45%</span>
     <span class="cache-label">·</span>
     <span class="cache-val">↖&nbsp;cached&nbsp;60%</span>
@@ -58,27 +52,22 @@
 
   <!-- Line 3 -->
   <div class="line">
-    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒</span><span class="bar-empty">░░░░░░░░░</span><span class="bracket">]</span><span class="bar-pct">23%</span><span class="reset">↻2h14m</span><span class="sep">·</span>
-    <span class="ctx-label">7d</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░</span><span class="bracket">]</span><span class="bar-pct">61%</span><span class="reset">↻3d5h</span>
+    <span class="ctx-label">5h</span><span class="bar-fill">━━━</span><span class="limit-track">─────────</span><span class="bar-pct">23%</span><span class="reset">↻2h14m</span><span class="sep">·</span>
+    <span class="ctx-label">7d</span><span class="bar-fill">━━━━━━━</span><span class="limit-track">─────</span><span class="bar-pct">61%</span><span class="reset">↻3d5h</span><span class="sep">·</span>
+    <span class="cost">⌂&nbsp;$186.42</span>
   </div>
 
   <h2>Model — raw ID, no hardcoded mapping</h2>
   <div class="line"><span class="model">deepseek-v4-pro</span> <span style="color:#565f89;font-size:12px">← just the raw model string, works for any model</span></div>
 
-  <h2>Progress bar — shade chars, single ANSI wrapper</h2>
-  <div class="diagram">
-    One <code style="color:#a9b1d6">fg(115)</code> wraps ALL filled chars: <span class="c">▓▓▓▓▓▓▓▓▓</span><span class="u">▒▒▒▒▒</span> → then <code style="color:#a9b1d6">R</code> + <code style="color:#a9b1d6">fg(236)</code> for empty <span class="e">░░░░░░░░░░░░░░░░░░</span>
+  <h2>Progress bar — thin line glyphs</h2>
+  <div class="effort-row">
+    <span class="bar-fill">━━━━━━</span> <span style="color:#565f89;font-size:12px">cached (fg 115)</span>
+    <span class="bar-uncached">━━━━━━</span> <span style="color:#565f89;font-size:12px">uncached (fg 66)</span>
+    <span class="limit-track">──────</span> <span style="color:#565f89;font-size:12px">remaining (fg 239)</span>
   </div>
   <div style="color:#565f89;font-size:12px;margin-top:4px">
-    0 internal ANSI boundaries within the filled section → no seams between cached/uncached<br>
-    Only 1 boundary at used→empty transition (unavoidable: needs different color)
-  </div>
-
-  <h2>Character density tiers (same fg color 115)</h2>
-  <div class="effort-row">
-    <span class="bar-fill">▓▓▓▓▓▓</span> <span style="color:#565f89;font-size:12px">75% density — cached, brighter</span>
-    <span class="bar-fill">▒▒▒▒▒▒</span> <span style="color:#565f89;font-size:12px">50% density — uncached, darker</span>
-    <span class="bar-empty">░░░░░░</span> <span style="color:#565f89;font-size:12px">25% density — empty pixel dots</span>
+    Line glyphs instead of shade blocks (▓▒░), which fill the whole cell in many fonts and made stacked bars merge
   </div>
 
   <hr>
@@ -87,24 +76,21 @@
   <div class="variant">
     <div class="variant-label">12% used, 90% cached — 1M window</div>
     <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">1M</span><span class="bracket">[</span>
-      <span class="bar-fill">▓▓▓▒</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░░░░░░░░░░░</span><span class="bracket">]</span>
+      <span class="ctx-label">ctx</span><span class="ctx-size">1M</span><span class="bar-fill">━━━</span><span class="bar-uncached">━</span><span class="limit-track">────────────────────────────</span>
       <span class="bar-pct">12%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;90%</span>
     </div>
   </div>
   <div class="variant">
     <div class="variant-label">85% used, 56% cached — 200K window</div>
     <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bracket">[</span>
-      <span class="bar-fill">▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░</span><span class="bracket">]</span>
+      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bar-fill">━━━━━━━━━━━━━━━</span><span class="bar-uncached">━━━━━━━━━━━━</span><span class="limit-track">─────</span>
       <span class="bar-pct">85%</span><span class="cache-label">·</span><span class="cache-val">↖&nbsp;cached&nbsp;56%</span>
     </div>
   </div>
   <div class="variant">
     <div class="variant-label">45% used, no cache → all uncached fill, no cache label</div>
     <div class="line">
-      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bracket">[</span>
-      <span class="bar-fill">▒▒▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░░░░░░░░░░░░░░░░░</span><span class="bracket">]</span>
+      <span class="ctx-label">ctx</span><span class="ctx-size">200K</span><span class="bar-uncached">━━━━━━━━━━━━━━</span><span class="limit-track">──────────────────</span>
       <span class="bar-pct">45%</span>
     </div>
   </div>
@@ -113,19 +99,20 @@
 
   <h2>Line 3 — Usage limits (subscription logins only)</h2>
   <div style="color:#565f89;font-size:12px;margin-bottom:12px">
-    Two 12-col bars → same width as line 2 · <code style="color:#a9b1d6">↻</code> reset countdown · hidden when <code style="color:#a9b1d6">rate_limits</code> is absent
+    Two 12-col thin-line bars (<code style="color:#a9b1d6">━</code> used / <code style="color:#a9b1d6">─</code> left) · <code style="color:#a9b1d6">↻</code> reset countdown · <code style="color:#a9b1d6">$</code> <code style="color:#a9b1d6">⌂</code> local API-equivalent cost of the current 7d window · hidden when <code style="color:#a9b1d6">rate_limits</code> is absent
   </div>
   <div class="variant">
-    <div class="variant-label">Warning (≥70%, yellow) and critical (≥90%, red)</div>
+    <div class="variant-label">Warning (≥70%, yellow) and critical (≥90%, red) — bar and percentage</div>
     <div class="line">
-    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒▒▒</span><span class="bar-empty">░░░</span><span class="bracket">]</span><span class="bar-pct pct-warn">78%</span><span class="reset">↻38m</span><span class="sep">·</span>
-    <span class="ctx-label">7d</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒▒▒▒▒▒▒▒</span><span class="bar-empty"></span><span class="bracket">]</span><span class="bar-pct pct-crit">94%</span><span class="reset">↻20h</span>
+    <span class="ctx-label">5h</span><span class="bar-fill pct-warn">━━━━━━━━━</span><span class="limit-track">───</span><span class="bar-pct pct-warn">78%</span><span class="reset">↻38m</span><span class="sep">·</span>
+    <span class="ctx-label">7d</span><span class="bar-fill pct-crit">━━━━━━━━━━━</span><span class="limit-track">─</span><span class="bar-pct pct-crit">94%</span><span class="reset">↻20h</span><span class="sep">·</span>
+    <span class="cost">⌂&nbsp;$412.80</span>
   </div>
   </div>
   <div class="variant">
-    <div class="variant-label">Only 5h window reported</div>
+    <div class="variant-label">Only 5h window reported (no weekly cost)</div>
     <div class="line">
-    <span class="ctx-label">5h</span><span class="bracket">[</span><span class="bar-fill">▒▒▒▒▒</span><span class="bar-empty">░░░░░░░</span><span class="bracket">]</span><span class="bar-pct">42%</span><span class="reset">↻38m</span>
+    <span class="ctx-label">5h</span><span class="bar-fill">━━━━━</span><span class="limit-track">───────</span><span class="bar-pct">42%</span><span class="reset">↻38m</span>
   </div>
   </div>
 

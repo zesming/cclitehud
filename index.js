@@ -6,16 +6,17 @@
  *
  * Line 1   Model · Effort · Directory · Git branch · Recent skill
  * Line 2   Context window progress bar with cache-breakdown + percentages
- * Line 3   Usage limits (5h / 7d) — only for subscription logins
+ * Line 3   Usage limits (5h / 7d) + API-equivalent cost of the current 7d window
+ *          — only for subscription logins
  *
  * Reads StatusJSON from stdin (piped by Claude Code).
  * Run with --preview to see a sample rendering.
  */
 
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const {
   readFileSync, mkdirSync, writeFileSync, appendFileSync,
-  existsSync, readdirSync, statSync, unlinkSync,
+  existsSync, readdirSync, statSync, unlinkSync, renameSync,
 } = require('fs');
 const path = require('path');
 const os = require('os');
@@ -23,7 +24,7 @@ const os = require('os');
 // ─── Configuration ───────────────────────────────────────────────────────────
 const CONFIG = {
   barWidth: 32,
-  limitBarWidth: 12, // two limit bars → line 3 as wide as line 2
+  limitBarWidth: 12, // two limit bars → line 3 about as wide as line 2
   limitWarnPct: 70,
   limitCritPct: 90,
   maxDirDepth: 2, // how many trailing path segments to show
@@ -41,12 +42,13 @@ const C = {
   separator: 243, // muted gray
   label: 248, // light gray
   // Progress bar
-  barFilled: 115, // single foreground — shade chars create tiers
-  barEmpty: 236, // dark gray for pixel-dot background
-  barBracket: 243, // brackets around bar
+  barFilled: 115, // bar fill — cached part of the ctx bar
+  barUncached: 66, // dimmer teal — uncached part of the ctx bar
+  barTrack: 239, // thin track behind the filled part
   barPct: 250, // percentage text
-  pctWarn: 221, // soft yellow — limit ≥ warn threshold
-  pctCrit: 203, // soft red — limit ≥ crit threshold
+  pctWarn: 221, // soft yellow — limit ≥ warn threshold (bar + %)
+  pctCrit: 203, // soft red — limit ≥ crit threshold (bar + %)
+  cost: 180, // soft tan — weekly API-equivalent cost
 };
 
 // ─── ANSI helpers ────────────────────────────────────────────────────────────
@@ -110,12 +112,12 @@ function num(v) {
 }
 
 // ─── Glyphs ──────────────────────────────────────────────────────────────────
-// Shade characters: density creates visual tiers WITHOUT ANSI color boundaries
-// ▓ (75%) → looks bright  ·  ▒ (50%) → looks darker  ·  ░ (25%) → pixel dots
-const FILL_CACHED   = '▓'; // dark shade  — cached = brighter
-const FILL_UNCACHED = '▒'; // medium shade — uncached = darker
-const FILL_EMPTY    = '░'; // light shade — pixel-dot background
+// Thin line glyphs for all bars: shade blocks (▓▒░) fill the whole cell in
+// many fonts, which made stacked bars on lines 2 and 3 visually merge.
+const BAR_FILL  = '━'; // heavy line — used
+const BAR_TRACK = '─'; // light line — remaining
 const SEP = '·'; // middle dot separator
+const LOCAL_ICON = '⌂'; // marks the cost as computed from local transcripts
 
 // Context window sizes by model family (default 200k)
 const MODEL_CONTEXT = {
@@ -348,15 +350,14 @@ function formatSize(n) {
 }
 
 // ─── Progress bar renderer ───────────────────────────────────────────────────
-// Single foreground color for the entire filled portion — no internal ANSI
-// boundaries. Visual tiers come from shade-character density:
-//   ▓ (75%) = cached, brighter  |  ▒ (50%) = uncached, darker  |  ░ (25%) = empty
-// This follows ccstatusline's pattern: one-color bar, no per-character fg().
+//   ━ bright = cached  |  ━ dim = uncached  |  ─ = remaining
 //
-// usedPct      — total context window usage (0–100)
+// usedPct      — total usage (0–100)
 // cachePctUsed — cache-hit portion of USED context (0–100), NOT of total window
-// width        — character width of the bar interior
-function renderBar(usedPct, cachePctUsed, width) {
+// width        — character width of the bar
+// color        — single fill color for the whole used part (usage-limit bars);
+//                omit to split cached / uncached by color (ctx bar)
+function renderBar(usedPct, cachePctUsed, width, color) {
   usedPct = Math.max(0, Math.min(100, usedPct));
   cachePctUsed = Math.max(0, Math.min(100, cachePctUsed || 0));
 
@@ -371,17 +372,10 @@ function renderBar(usedPct, cachePctUsed, width) {
   const u = Math.max(0, totalCols - c);
   const e = Math.max(0, width - totalCols);
 
-  // Build the filled portion as a single string — ONE fg() wrapper, zero
-  // internal ANSI codes. The shade characters (▓ vs ▒) create the visual
-  // distinction without any color boundary in between.
-  let filled = '';
-  if (c > 0) filled += FILL_CACHED.repeat(c);
-  if (u > 0) filled += FILL_UNCACHED.repeat(u);
-
   let bar = '';
-  if (filled.length > 0) bar += fg(C.barFilled) + filled + R;
-  if (e > 0) bar += fg(C.barEmpty) + FILL_EMPTY.repeat(e) + R;
-
+  if (c > 0) bar += fg(color || C.barFilled) + BAR_FILL.repeat(c) + R;
+  if (u > 0) bar += fg(color || C.barUncached) + BAR_FILL.repeat(u) + R;
+  if (e > 0) bar += fg(C.barTrack) + BAR_TRACK.repeat(e) + R;
   return bar;
 }
 
@@ -493,7 +487,7 @@ function renderLine2(data) {
   // Label with context window size
   line += fg(C.label) + 'ctx' + NBSP + fg(C.separator) + sizeStr + NBSP + R;
   // Bar
-  line += fg(C.barBracket) + '[' + R + bar + fg(C.barBracket) + ']' + R;
+  line += bar;
   // Percentage
   line += NBSP + fg(C.barPct) + B + pctStr + R;
 
@@ -523,10 +517,11 @@ function formatCountdown(resetsAt, nowMs) {
   return m + 'm';
 }
 
-function limitPctColor(pct) {
+// Threshold color for a limit window, or null below the warn threshold
+function limitLevelColor(pct) {
   if (pct >= CONFIG.limitCritPct) return C.pctCrit;
   if (pct >= CONFIG.limitWarnPct) return C.pctWarn;
-  return C.barPct;
+  return null;
 }
 
 function renderLimit(label, win, nowMs) {
@@ -534,15 +529,22 @@ function renderLimit(label, win, nowMs) {
     return null;
   }
   const pct = Math.max(0, Math.min(100, win.used_percentage));
+  const level = limitLevelColor(pct);
   let s = fg(C.label) + label + NBSP + R;
-  s += fg(C.barBracket) + '[' + R + renderBar(pct, 0, CONFIG.limitBarWidth) + fg(C.barBracket) + ']' + R;
-  s += NBSP + fg(limitPctColor(pct)) + B + pct.toFixed(0) + '%' + R;
+  s += renderBar(pct, 0, CONFIG.limitBarWidth, level || C.barFilled);
+  s += NBSP + fg(level || C.barPct) + B + pct.toFixed(0) + '%' + R;
   const countdown = formatCountdown(win.resets_at, nowMs);
   if (countdown) s += NBSP + fg(C.separator) + '↻' + countdown + R;
   return s;
 }
 
-function renderLine3(data, nowMs) {
+function formatUsd(usd) {
+  if (usd >= 1000) return '$' + Math.round(usd).toLocaleString('en-US');
+  return '$' + usd.toFixed(2);
+}
+
+// weeklyCost — override for preview/doctor; otherwise read from the cost cache
+function renderLine3(data, nowMs, weeklyCost) {
   const rl = data && data.rate_limits;
   if (!rl || typeof rl !== 'object') return null;
   const now = nowMs || Date.now();
@@ -551,7 +553,160 @@ function renderLine3(data, nowMs) {
     renderLimit('7d', rl.seven_day, now),
   ].filter(Boolean);
   if (parts.length === 0) return null;
+  const cost = weeklyCost !== undefined ? weeklyCost : getWeeklyCost(rl.seven_day, now);
+  if (typeof cost === 'number' && Number.isFinite(cost)) {
+    parts.push(fg(C.cost) + LOCAL_ICON + NBSP + formatUsd(cost) + R);
+  }
   return '\x1b[0m' + parts.join(dimDot()).replace(/ /g, NBSP);
+}
+
+// ─── Weekly API-equivalent cost ──────────────────────────────────────────────
+// Sums what this machine's Claude Code usage in the current 7d limit window
+// would cost at API list prices. Source: transcripts under
+// <CLAUDE_CONFIG_DIR|~/.claude>/projects/**/*.jsonl (subagents included),
+// deduplicated by message.id + requestId (one response spans several lines).
+//
+// Scanning is done by a detached `--refresh-cost` child so rendering never
+// blocks; the statusline shows the last cached value for the same window.
+const COST_CACHE_FILE = path.join(CACHE_DIR, 'weekly-cost.json');
+const COST_LOCK_FILE = path.join(CACHE_DIR, 'weekly-cost.lock');
+const COST_TTL_MS = 60 * 1000;
+const COST_LOCK_STALE_MS = 2 * 60 * 1000;
+const WEEK_SECS = 7 * 86400;
+
+// $ per million tokens: [input, output, cacheRead]. Cache writes are derived:
+// 5m = 1.25× input, 1h = 2× input. First matching prefix wins, so more
+// specific IDs must come before shorter ones.
+const PRICING = [
+  ['claude-fable-5-1', [10, 50, 0.25]],
+  ['claude-mythos-5-1', [10, 50, 0.25]],
+  ['claude-fable-5', [10, 50, 1]],
+  ['claude-mythos-5', [10, 50, 1]],
+  ['claude-opus-5-5', [4, 20, 0.2]],
+  ['claude-opus-5', [5, 25, 0.5]],
+  ['claude-opus-4-8', [5, 25, 0.5]],
+  ['claude-opus-4-7', [5, 25, 0.5]],
+  ['claude-opus-4-6', [5, 25, 0.5]],
+  ['claude-opus-4-5', [5, 25, 0.5]],
+  ['claude-opus-4', [15, 75, 1.5]],
+  ['claude-sonnet-5-5', [2, 10, 0.2]],
+  ['claude-sonnet-5', [2, 10, 0.2]],
+  ['claude-sonnet-4', [3, 15, 0.3]],
+  ['claude-haiku-5-5', [0.1, 0.5, 0.01]],
+  ['claude-haiku-4-5', [1, 5, 0.1]],
+  ['claude-3-5-haiku', [0.8, 4, 0.08]],
+];
+const HAIKU_55_LONG = [0.5, 2.5, 0.05]; // prompts over 100K tokens
+const FAST_MULTIPLIER = 2; // usage.speed === 'fast'
+
+function priceFor(model) {
+  const id = String(model || '').replace(/^(?:us\.|eu\.|global\.)?anthropic\./, '');
+  for (const [prefix, price] of PRICING) {
+    if (id.startsWith(prefix)) return price;
+  }
+  return null; // unknown / non-Claude model → not counted
+}
+
+function usageCostUsd(model, u) {
+  let price = priceFor(model);
+  if (!price || !u) return 0;
+  const input = num(u.input_tokens);
+  const output = num(u.output_tokens);
+  const read = num(u.cache_read_input_tokens);
+  const create = num(u.cache_creation_input_tokens);
+  const cc = u.cache_creation && typeof u.cache_creation === 'object' ? u.cache_creation : null;
+  const write1h = cc ? num(cc.ephemeral_1h_input_tokens) : 0;
+  const write5m = cc ? Math.max(0, create - write1h) : create;
+  if (String(model).includes('haiku-5-5') && input + read + create > 100000) price = HAIKU_55_LONG;
+  const [pIn, pOut, pRead] = price;
+  let usd = (input * pIn + output * pOut + read * pRead
+    + write5m * pIn * 1.25 + write1h * pIn * 2) / 1e6;
+  if (u.speed === 'fast') usd *= FAST_MULTIPLIER;
+  return usd;
+}
+
+function projectsDir() {
+  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  return path.join(base, 'projects');
+}
+
+/** Scan transcripts and sum API-equivalent cost for messages at or after windowStart (unix s) */
+function computeWindowCost(windowStart) {
+  const startMs = windowStart * 1000;
+  const files = [];
+  (function walk(dir) {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith('.jsonl')) {
+        try { if (statSync(full).mtimeMs >= startMs) files.push(full); } catch {}
+      }
+    }
+  })(projectsDir());
+
+  // Last line per response wins (later lines carry the final usage)
+  const byKey = new Map();
+  for (const f of files) {
+    let raw;
+    try { raw = readFileSync(f, 'utf8'); } catch { continue; }
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"usage"')) continue;
+      let d;
+      try { d = JSON.parse(line); } catch { continue; }
+      const msg = d && d.message;
+      if (!msg || !msg.usage) continue;
+      if (!(Date.parse(d.timestamp) >= startMs)) continue;
+      const key = (msg.id || '') + ':' + (d.requestId || '');
+      if (key === ':') continue;
+      byKey.set(key, usageCostUsd(msg.model, msg.usage));
+    }
+  }
+  let total = 0;
+  for (const usd of byKey.values()) total += usd;
+  return total;
+}
+
+/** Handle --refresh-cost <windowStart>: recompute and write the cost cache */
+function refreshCost(windowStart) {
+  try {
+    const usd = computeWindowCost(windowStart);
+    mkdirSync(CACHE_DIR, { recursive: true });
+    const tmp = COST_CACHE_FILE + '.' + process.pid;
+    writeFileSync(tmp, JSON.stringify({ windowStart, usd, computedAt: Date.now() }));
+    renameSync(tmp, COST_CACHE_FILE);
+  } catch {}
+  try { unlinkSync(COST_LOCK_FILE); } catch {}
+}
+
+function spawnCostRefresh(windowStart) {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    try {
+      if (Date.now() - statSync(COST_LOCK_FILE).mtimeMs < COST_LOCK_STALE_MS) return; // refresh in flight
+      unlinkSync(COST_LOCK_FILE);
+    } catch {}
+    writeFileSync(COST_LOCK_FILE, String(process.pid), { flag: 'wx' });
+    const child = spawn(process.execPath, [__filename, '--refresh-cost', String(windowStart)], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {}
+}
+
+/** Cached weekly cost for the given seven_day window, kicking off a refresh when stale */
+function getWeeklyCost(win, nowMs) {
+  const resetsAt = win && Number(win.resets_at);
+  if (!Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  // Round to the minute so jitter in resets_at doesn't look like a new window
+  const windowStart = Math.round((resetsAt - WEEK_SECS) / 60) * 60;
+  let cache = null;
+  try { cache = JSON.parse(readFileSync(COST_CACHE_FILE, 'utf8')); } catch {}
+  const sameWindow = cache && cache.windowStart === windowStart && typeof cache.usd === 'number';
+  if (!sameWindow || nowMs - num(cache.computedAt) > COST_TTL_MS) spawnCostRefresh(windowStart);
+  return sameWindow ? cache.usd : null;
 }
 
 // ─── Preview mode ────────────────────────────────────────────────────────────
@@ -615,20 +770,20 @@ function preview() {
   };
   console.log('');
   console.log('  ' + renderLine2(sample));
-  console.log('  ' + renderLine3(sample));
+  console.log('  ' + renderLine3(sample, undefined, 186.42));
   console.log('');
 
   // ── Line 3 variants ──
   console.log('  Usage limit variants:');
   const limitVariants = [
-    { label: 'Warning (≥70%) and critical (≥90%)', five: 78, seven: 94 },
-    { label: 'Only 5h window reported', five: 42, seven: null },
+    { label: 'Warning (≥70%, yellow) and critical (≥90%, red)', five: 78, seven: 94 },
+    { label: 'Only 5h window reported (no weekly cost)', five: 42, seven: null },
   ];
   for (const v of limitVariants) {
     const rl = { five_hour: { used_percentage: v.five, resets_at: nowSec + 38 * 60 } };
     if (v.seven !== null) rl.seven_day = { used_percentage: v.seven, resets_at: nowSec + 20 * 3600 };
     console.log('    ' + v.label);
-    console.log('    ' + renderLine3({ rate_limits: rl }));
+    console.log('    ' + renderLine3({ rate_limits: rl }, undefined, v.seven !== null ? 412.8 : null));
   }
   console.log('');
 
@@ -664,9 +819,9 @@ function preview() {
 
   console.log('');
   console.log('  Legend:');
-  console.log('  ' + fg(C.barFilled) + FILL_CACHED.repeat(10) + R + '  cached (▓ 75% density, brighter)');
-  console.log('  ' + fg(C.barFilled) + FILL_UNCACHED.repeat(10) + R + '  uncached (▒ 50% density, darker)');
-  console.log('  ' + fg(C.barEmpty) + FILL_EMPTY.repeat(10) + R + '  empty (░ 25% density, pixel dots)');
+  console.log('  ' + fg(C.barFilled) + BAR_FILL.repeat(10) + R + '  cached (bright)');
+  console.log('  ' + fg(C.barUncached) + BAR_FILL.repeat(10) + R + '  uncached (dim)');
+  console.log('  ' + fg(C.barTrack) + BAR_TRACK.repeat(10) + R + '  remaining');
   console.log('');
   console.log('  Effort icon: ◆ (unified for all levels — color indicates intensity)');
   console.log('');
@@ -920,7 +1075,7 @@ function doctor() {
       five_hour: { used_percentage: 30, resets_at: Date.now() / 1000 + 3600 },
       seven_day: { used_percentage: 50, resets_at: Date.now() / 1000 + 86400 },
     };
-    const line3 = renderLine3(mockData);
+    const line3 = renderLine3(mockData, undefined, 123.45);
     if (line1.length > 0 && line2.length > 0 && line3) {
       pass('Render test', 'all three lines generated');
       console.log('');
@@ -991,6 +1146,14 @@ function main() {
   // --hook mode: process hook payload from Claude Code (PreToolUse / UserPromptSubmit)
   if (process.argv.includes('--hook')) {
     handleHook();
+    return;
+  }
+
+  // --refresh-cost mode: background recompute of the weekly cost cache
+  const rcIdx = process.argv.indexOf('--refresh-cost');
+  if (rcIdx >= 0) {
+    const windowStart = Number(process.argv[rcIdx + 1]);
+    if (Number.isFinite(windowStart)) refreshCost(windowStart);
     return;
   }
 

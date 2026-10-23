@@ -6,8 +6,8 @@ Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with CJK-
 
 ```
 deepseek-v4-pro · ◆ max · ~/Projects · ⎇ feature/statusline · ✦ brainstorming
-ctx 1M [▓▓▓▓▓▓▓▓▓▒▒▒▒▒░░░░░░░░░░░░░░░░░░] 45% · ↖ cached 60%
-5h [▒▒▒░░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒▒░░░░░] 61% ↻3d5h
+ctx 1M ━━━━━━━━━━━━━━────────────────── 45% · ↖ cached 60%
+5h ━━━───────── 23% ↻2h14m · 7d ━━━━━━━───── 61% ↻3d5h · ⌂ $186.42
 ```
 
 > Run `node index.js --preview` to see all effort levels and usage variants.
@@ -25,23 +25,24 @@ In the Claude desktop app's Code tab, an optional [desktop plugin](#desktop-app-
 
 **Line 2** — Context window
 - **Window size** — `200K` / `1M` auto-detected from model ID
-- **Progress bar** — single-color foreground with shade-character tiers:
-  - `▓` (75% density) = cached tokens
-  - `▒` (50% density) = uncached tokens
-  - `░` (25% density) = empty space
+- **Progress bar** — thin-line bar, same style as the usage-limit bars:
+  - bright `━` = cached tokens
+  - dim `━` = uncached tokens
+  - `─` = remaining space
 - **Usage %** — total context window usage
 - **Cached %** — cache hit rate (cache_read ÷ actual_context × 100)
 
 **Line 3** — Usage limits (Claude.ai subscription logins only)
-- **5h / 7d** — rolling 5-hour and weekly limit usage, each with a compact progress bar
+- **5h / 7d** — rolling 5-hour and weekly limit usage, each with a compact thin-line bar (`━` used, `─` remaining) so it stays visually separate from the ctx bar above
 - **Reset countdown** — `↻` time until the window resets (`38m`, `2h14m`, `3d5h`)
-- **Threshold colors** — percentage turns yellow at ≥70% and red at ≥90%
+- **Threshold colors** — bar and percentage turn yellow at ≥70% and red at ≥90%
+- **Weekly API-equivalent cost** — `⌂ $186.42` at the end (`⌂` = local): what this machine's Claude Code usage in the current 7d window would cost at API list prices. Computed from the transcripts under `~/.claude/projects` (subagents included, non-Claude models skipped) by a background refresh at most once a minute, so it covers only this machine and appears one refresh after the first render
 - Hidden entirely when `rate_limits` is absent (API key / third-party proxy, or before the first API response); a window without data is omitted
 
 ## Features beyond ccstatusline
 
-- **Cache-hit visualization** — the context bar splits cached vs. uncached tokens using shade-character density, with no color seams.
-- **Usage limits** — 5h / weekly subscription limits with reset countdowns and warning colors.
+- **Cache-hit visualization** — the context bar splits cached vs. uncached tokens with two shades of the same color on a thin-line bar.
+- **Usage limits** — 5h / weekly subscription limits with reset countdowns, warning colors, and the week's API-equivalent cost.
 - **CJK-aware width** — Skill name truncation correctly accounts for double-width CJK characters.
 - **Safe by default** — Session IDs are sanitized before being used in file paths; model, branch, and skill names are stripped of terminal control sequences.
 - **Self-cleaning** — Per-session skill files untouched for 7 days are pruned automatically.
@@ -205,8 +206,8 @@ Edit `index.js` — the `CONFIG` and `C` objects at the top:
 const CONFIG = {
   barWidth: 32,       // context bar character width
   limitBarWidth: 12,  // width of each usage-limit bar (line 3)
-  limitWarnPct: 70,   // usage-limit % turns yellow at this level
-  limitCritPct: 90,   // usage-limit % turns red at this level
+  limitWarnPct: 70,   // usage-limit bar + % turn yellow at this level
+  limitCritPct: 90,   // usage-limit bar + % turn red at this level
   maxDirDepth: 2,     // directory path segments to show
 };
 
@@ -216,11 +217,15 @@ const C = {
   dir: 111,           // directory color
   git: 183,           // git branch color
   skill: 216,         // skill name color
-  barFilled: 115,     // progress bar fill color
-  barEmpty: 236,      // progress bar empty background
+  barFilled: 115,     // bar fill (cached part of the ctx bar)
+  barUncached: 66,    // uncached part of the ctx bar
+  barTrack: 239,      // remaining-space track
   pctWarn: 221,       // usage-limit warning color
   pctCrit: 203,       // usage-limit critical color
+  cost: 180,          // weekly API-equivalent cost color
 };
+
+API prices used for the weekly cost live in the `PRICING` table in `index.js`.
 ```
 
 Color codes are ANSI 256-color palette values (0–255).
