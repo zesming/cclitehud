@@ -3,7 +3,8 @@ import type { EngineInterface, Register } from 'claude-code'
 
 // cclitehud for the desktop Code tab: two rows above the prompt, dir,
 // worktree, branch and skill on the first, the context and usage-limit bars
-// on the second. Model and effort are left out because the desktop already
+// on the second, ending with the local API-equivalent cost of the current
+// 7d window. Model and effort are left out because the desktop already
 // shows them. The terminal keeps its real statusLine, so this band only
 // draws on non-terminal surfaces.
 
@@ -31,13 +32,25 @@ const C = {
   barFilled: '#3fa58a',
   pctWarn: '#c9a227',
   pctCrit: '#d9534f',
+  cost: '#b8865b',
 }
 
-const FILL_CACHED = '▓'
-const FILL_UNCACHED = '▒'
-const FILL_EMPTY = '░'
+// Thin line glyphs, as in index.js: cached is the full fill color, uncached
+// the same color dimmed, the remaining track a light line
+const BAR_FILL = '━'
+const BAR_TRACK = '─'
 const COMPACT_MARK = '│'
 const WORKTREE_ICON = '⧉'
+const LOCAL_ICON = '⌂'
+
+// Weekly cost: index.js --refresh-cost scans the local transcripts and writes
+// ~/.cache/cclitehud/weekly-cost.json, the cache the terminal statusline
+// shares; the band reads it and asks for a refresh after each measurement
+const COST_TTL_MS = 60_000
+const WEEK_SECS = 7 * 86400
+const NODE_CANDIDATES = ['node', '/opt/homebrew/bin/node', '/usr/local/bin/node']
+const costState = { lastRefresh: 0, node: null as string | null }
+type WeeklyCost = { windowStart: number; usd: number; computedAt: number }
 
 const GIT_TTL = 5000
 type GitInfo = { branch: string | null; mainRoot: string | null; worktree: string | null }
@@ -74,9 +87,9 @@ function barCells(usedPct: number, cachedOfUsed: number, width: number, markAt: 
 }
 
 const CELL_CHAR: Record<Cell, string> = {
-  cached: FILL_CACHED,
-  uncached: FILL_UNCACHED,
-  empty: FILL_EMPTY,
+  cached: BAR_FILL,
+  uncached: BAR_FILL,
+  empty: BAR_TRACK,
   mark: COMPACT_MARK,
 }
 
@@ -97,6 +110,51 @@ function countdown(resetsAt: string | undefined, nowMs: number) {
   if (d > 0) return d + 'd' + (h > 0 ? h + 'h' : '')
   if (h > 0) return h + 'h' + (m > 0 ? m + 'm' : '')
   return m + 'm'
+}
+
+function formatUsd(usd: number) {
+  if (usd >= 1000) return '$' + Math.round(usd).toLocaleString('en-US')
+  return '$' + usd.toFixed(2)
+}
+
+// Same window key as index.js: the 7d reset minus a week, to the minute
+function windowStartOf(resetsAt: string | undefined) {
+  const t = resetsAt ? Date.parse(resetsAt) / 1000 : NaN
+  if (!Number.isFinite(t) || t <= 0) return null
+  return Math.round((t - WEEK_SECS) / 60) * 60
+}
+
+async function readWeeklyCost($: EngineInterface, windowStart: number): Promise<WeeklyCost | null> {
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) return null
+    const c = JSON.parse(await $.fs.read(home + '/.cache/cclitehud/weekly-cost.json'))
+    return c && c.windowStart === windowStart && typeof c.usd === 'number' ? c : null
+  } catch {
+    return null
+  }
+}
+
+// Runs index.js --refresh-cost when the cache is stale; true when it ran
+async function refreshWeeklyCost($: EngineInterface, windowStart: number) {
+  const now = await $.clock.now()
+  if (now - costState.lastRefresh < COST_TTL_MS) return false
+  const cached = await readWeeklyCost($, windowStart)
+  if (cached && now - cached.computedAt < COST_TTL_MS) return false
+  costState.lastRefresh = now
+  const script = $.plugin.root.replace(/\/+$/, '') + '/../index.js'
+  for (const node of costState.node ? [costState.node] : NODE_CANDIDATES) {
+    try {
+      const r = await $.process.run([node, script, '--refresh-cost', String(windowStart)], { timeoutMs: 30_000 })
+      if (r.exitCode === 0) {
+        costState.node = node
+        return true
+      }
+    } catch {
+      // not on PATH here — try the next candidate
+    }
+  }
+  return false
 }
 
 function shortPath(full: string, home: string | null) {
@@ -195,7 +253,12 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     compactCache.window = 0
     await update($, tick, n => n + 1)
-    return next(e)
+    const result = await next(e)
+    const windowStart = windowStartOf(e.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
+    if (windowStart !== null && (await refreshWeeklyCost($, windowStart).catch(() => false))) {
+      await update($, tick, n => n + 1)
+    }
+    return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -213,6 +276,8 @@ export const register: Register = on => {
     const ctx = usage.context
     const threshold = await compactThreshold($, ctx.window)
     const now = await $.clock.now()
+    const weekStart = windowStartOf(usage.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
+    const weekly = weekStart !== null ? await readWeeklyCost($, weekStart) : null
 
     const { Box, Text } = $.ui.resolve(e)
     const dot = (k: string) => (
@@ -221,7 +286,7 @@ export const register: Register = on => {
       </Text>
     )
 
-    // A bar as runs of same-kind cells, so the mark can be dimmed apart
+    // A bar as runs of same-kind cells: uncached and the mark dimmed apart
     const renderBar = (k: string, cells: Cell[], fill: string) => {
       const runs: { kind: Cell; text: string }[] = []
       for (const c of cells) {
@@ -229,29 +294,21 @@ export const register: Register = on => {
         if (last && last.kind === c) last.text += CELL_CHAR[c]
         else runs.push({ kind: c, text: CELL_CHAR[c] })
       }
-      return [
-        <Text key={k + 'lb'} color={C.separator}>
-          [
-        </Text>,
-        ...runs.map((r, i) =>
-          r.kind === 'empty' ? (
-            <Text key={k + i} dimColor>
-              {r.text}
-            </Text>
-          ) : r.kind === 'mark' ? (
-            <Text key={k + i} color={C.separator} dimColor>
-              {r.text}
-            </Text>
-          ) : (
-            <Text key={k + i} color={fill}>
-              {r.text}
-            </Text>
-          ),
+      return runs.map((r, i) =>
+        r.kind === 'empty' ? (
+          <Text key={k + i} dimColor>
+            {r.text}
+          </Text>
+        ) : r.kind === 'mark' ? (
+          <Text key={k + i} color={C.separator} dimColor>
+            {r.text}
+          </Text>
+        ) : (
+          <Text key={k + i} color={fill} dimColor={r.kind === 'uncached'}>
+            {r.text}
+          </Text>
         ),
-        <Text key={k + 'rb'} color={C.separator}>
-          ]
-        </Text>,
-      ]
+      )
     }
 
     // [main project · ⧉ worktree | dir] · branch · skill
@@ -326,7 +383,7 @@ export const register: Register = on => {
           <Text key={w.kind + 'l'} color={C.label}>
             {labels[w.kind] + ' '}
           </Text>,
-          ...renderBar(w.kind, barCells(pct, 0, CONFIG.limitBarWidth, null), fill),
+          ...renderBar(w.kind, barCells(pct, 100, CONFIG.limitBarWidth, null), fill),
           <Text key={w.kind + 'p'} bold color={fill === C.barFilled ? undefined : fill}>
             {' ' + pct.toFixed(0) + '%'}
           </Text>,
@@ -340,6 +397,14 @@ export const register: Register = on => {
         }
         return i > 0 ? [dot('d6' + i), ...parts] : parts
       })
+    if (line3.length > 0 && weekly) {
+      line3.push(
+        dot('d7'),
+        <Text key="cost" color={C.cost}>
+          {LOCAL_ICON + ' ' + formatUsd(weekly.usd)}
+        </Text>,
+      )
+    }
 
     return (
       <Box flexDirection="column">

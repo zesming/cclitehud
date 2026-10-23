@@ -136,17 +136,17 @@ The terminal statusline above stays as it is. For the Claude desktop app's Code 
 
 ```
 Projects/cclitehud · ⧉ fix-login · ⎇ fix-login · ✦ brainstorming
-ctx 1M [▓▓▒░░░░░│░] 23% · ↖ cached 60% · 5h [▒▒░░░░░░░░] 23% ↻2h14m · 7d [▒▒▒▒▒▒▒▒░░] 78% ↻3d5h
+ctx 1M ━━━─────│─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ⌂ $186.42
 ```
 
 - **Row 1** — directory, git branch, recent skill / slash command. Inside a git worktree, the main project's path comes first, then `⧉` and the worktree's name.
-- **Row 2** — context, 5h and 7d bars, all the same width (10)
+- **Row 2** — context, 5h and 7d bars, all the same width (10), in the terminal's thin-line style (the context bar's uncached part is the dimmed fill color), then the local weekly API-equivalent cost `⌂ $…`
 - **Auto-compact mark** — a faint `│` in the context bar where auto-compaction kicks in (hidden when auto-compact is off)
 - **Bar colors** — the same thresholds as the terminal's usage-limit percentages (`limitWarnPct` 70, `limitCritPct` 90): a bar and its percentage turn yellow at ≥70% and red at ≥90%. For the context bar the percentage is measured against the auto-compact point (against the full window when auto-compact is off), so it warns before compaction.
 - **Model and effort are omitted** — the desktop already shows them below the prompt
 - **Terminal untouched** — the plugin draws only on the desktop surface, so a CLI session keeps the original three-line statusline and shows no duplicate
 
-It reads everything from the session directly (no `index.js`, no hooks in `settings.json`). Colors are mid-tone hex values readable in both light and dark themes.
+It reads everything from the session directly (no hooks in `settings.json`). The one exception is the weekly cost: after each measurement the plugin runs `node ../index.js --refresh-cost` (at most once a minute) and shows the same `~/.cache/cclitehud/weekly-cost.json` the terminal statusline uses, so keep `desktop-plugin/` inside the repo checkout and `node` installed (looked up on `PATH`, then `/opt/homebrew/bin` and `/usr/local/bin`). Colors are mid-tone hex values readable in both light and dark themes.
 
 ### Install
 
