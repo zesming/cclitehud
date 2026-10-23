@@ -22,13 +22,14 @@ const {
   readFileSync, mkdirSync, writeFileSync, appendFileSync,
   existsSync, readdirSync, statSync, unlinkSync, renameSync, realpathSync, chmodSync,
 } = require('fs');
+const { spawnSync } = require('child_process');
 const path = require('path');
 const os = require('os');
 
 // ─── 256-color palette (muted, modern, not garish) ──────────────────────────
 const C = {
   model: 117, // soft sky blue
-  effort: { low: 151, medium: 222, high: 215, xhigh: 210, ultra: 203, max: 209 },
+  effort: { low: 151, medium: 222, high: 215, xhigh: 210, max: 209 },
   effDefault: 248,
   separator: 243, // muted gray
 };
@@ -76,7 +77,7 @@ function prettyModel(raw) {
 
 // ─── Thinking-effort helpers ─────────────────────────────────────────────────
 const EFFORT_ICON = '◆'; // diamond icon, color-coded by effort level
-const EFFORT_LABELS = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', ultra: 'ultra', max: 'max' };
+const EFFORT_LABELS = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
 
 function effortColor(level) {
   if (!level) return fg(C.effDefault);
@@ -117,6 +118,9 @@ function renderStatusline(data) {
 // The plugin runs `--refresh-cost <windowStart>` at most once a minute
 // and reads the cache this writes.
 const COST_CACHE_FILE = path.join(CACHE_DIR, 'weekly-cost.json');
+// The node --install ran with, for the plugin: a desktop app's PATH misses
+// nvm / volta / asdf installs
+const NODE_PATH_FILE = path.join(CACHE_DIR, 'node-path');
 
 // $ per million tokens: [input, output, cacheRead], Anthropic API list prices
 // as of 2026-10. Cache writes are derived: 5m = 1.25× input, 1h = 2× input.
@@ -229,7 +233,7 @@ function refreshCost(windowStart) {
 
 // ─── Preview mode ────────────────────────────────────────────────────────────
 function preview() {
-  const efforts = ['low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
+  const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
   console.log('');
   console.log('  Statusline — model · effort (terminal, below the prompt):');
   console.log('');
@@ -409,12 +413,18 @@ function install() {
     process.exit(1);
   }
   const cleaned = removeLegacyCacheFiles();
+  let nodeNoted = true;
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(NODE_PATH_FILE, stableNodePath() + '\n');
+  } catch { nodeNoted = false; }
 
   console.log(`✅  cclitehud installed!`);
   console.log(`   statusLine → ${cmd}`);
   console.log(`   plugin     → env.CLAUDE_CODE_PLUGIN_DIRS includes ${PLUGIN_DIR}`);
   if (removed > 0) console.log(`   hooks      → removed ${removed} legacy skill hook(s)`);
   if (cleaned > 0) console.log(`   cache      → removed ${cleaned} legacy file(s) from ${CACHE_DIR}`);
+  if (!nodeNoted) console.log(`   node       → could not write ${NODE_PATH_FILE}; the plugin falls back to PATH`);
   console.log(`   config     → ${SETTINGS_PATH}`);
   if (backup) console.log(`   backup     → ${backup} (the file as it was before this run)`);
   console.log(`   Restart Claude Code (and the desktop app) to activate.`);
@@ -503,6 +513,14 @@ function doctor() {
     else pass('Legacy hooks', 'none');
   }
 
+  // Node for the plugin's weekly cost, as --install noted it
+  let noted = '';
+  try { noted = readFileSync(NODE_PATH_FILE, 'utf8').trim(); } catch {}
+  const runs = noted && spawnSync(noted, ['--version'], { timeout: 5000 }).status === 0;
+  if (runs) pass('Plugin node', `${noted} (runs the weekly cost scan)`);
+  else if (noted) warn('Plugin node', `${JSON.stringify(noted)} does not start — run --install again`);
+  else warn('Plugin node', 'not noted — the plugin looks for node on PATH (run --install)');
+
   // 5. Weekly cost scan (dry run over the current week, nothing written)
   try {
     const t0 = Date.now();
@@ -536,7 +554,7 @@ function doctor() {
   const summaryColor = failCount > 0 ? fg(203) : warnCount > 0 ? fg(222) : fg(151);
   console.log(`  ${summaryColor}${passCount} passed · ${warnCount} warnings · ${failCount} failed${R}`);
   console.log('');
-  console.log('  ╰───────────────────────────────────────────────────────────────╯');
+  console.log('  ╰────────────────────────────────────────────────────╯');
   console.log('');
 
   process.exit(failCount > 0 ? 1 : 0);

@@ -40,7 +40,7 @@ const BAR_FILL = '━'
 const BAR_TRACK = '─'
 const COMPACT_MARK = '•' // auto-compact point, gray, on top of the bar
 const WORKTREE_ICON = '⧉'
-const LOCAL_ICON = '⌂'
+const COST_ICON = '≈' // an estimate at API list prices
 
 // Weekly cost: `index.js --refresh-cost <windowStart>` scans the local
 // transcripts and writes ~/.cache/cclitehud/weekly-cost.json keyed by that
@@ -49,6 +49,8 @@ const LOCAL_ICON = '⌂'
 const COST_TTL_MS = 60_000
 const COST_FAIL_BACKOFF_MS = 10 * 60_000 // after a scan that failed or timed out
 const WEEK_SECS = 7 * 86400
+// Tried after the node --install noted in node-path (a desktop app's PATH
+// misses nvm / volta installs), with ~/.volta/bin/node last
 const NODE_CANDIDATES = ['node', '/opt/homebrew/bin/node', '/usr/local/bin/node']
 const costState = { nextRefresh: -Infinity, node: null as string | null }
 type WeeklyCost = { windowStart: number; usd: number; computedAt: number }
@@ -139,7 +141,10 @@ async function readWeeklyCost($: EngineInterface, windowStart: number): Promise<
 // The first node candidate that starts (a quick `--version`), remembered
 async function findNode($: EngineInterface) {
   if (costState.node) return costState.node
-  for (const node of NODE_CANDIDATES) {
+  const home = await $.env.get('HOME')
+  const noted = home ? await $.fs.read(home + '/.cache/cclitehud/node-path').then(s => s.trim(), () => '') : ''
+  const volta = home ? [home + '/.volta/bin/node'] : []
+  for (const node of [...(noted ? [noted] : []), ...NODE_CANDIDATES, ...volta]) {
     try {
       const r = await $.process.run([node, '--version'], { timeoutMs: 5_000 })
       if (r.exitCode === 0) return (costState.node = node)
@@ -426,7 +431,7 @@ export const register: Register = on => {
         key: 'cost',
         parts: [
           <Text key="cost" color={C.cost}>
-            {LOCAL_ICON + ' ' + formatUsd(weekly.usd)}
+            {COST_ICON + ' ' + formatUsd(weekly.usd)}
           </Text>,
         ],
       })

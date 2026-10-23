@@ -6,7 +6,7 @@ Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with cach
 
 ```
 Projects/cclitehud · ⎇ main · ✦ brainstorming                                          ← plugin (above the prompt)
-ctx 1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ⌂ $186.42
+ctx 1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ≈ $186.42
 > _                                                                                      ← prompt
 claude-opus-5-5 · ◆ medium                                                               ← statusLine (terminal only)
 ```
@@ -34,15 +34,15 @@ The plugin reads the session through the plugin API (plus `git` for the branch a
 - **Cached %** — cache hit rate of the last turn (cache_read ÷ all input tokens)
 - **5h / 7d** — subscription usage-limit bars with a `↻` reset countdown (`38m`, `2h14m`, `3d5h`); absent on API-key logins
 - **Threshold colors** — a bar and its percentage turn yellow at ≥70% and red at ≥90%. The context percentage is of the full window, but its color is judged against the auto-compact point (the full window when auto-compact is off), so it warns before compaction
-- **Weekly cost** — `⌂ $186.42`, where `⌂` means local: what this machine's Claude Code usage in the current 7d limit window would cost at API list prices. Computed from the transcripts under `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` when set) (subagents included, non-Claude models skipped), deduplicated per response, refreshed at most once a minute. It counts this machine only, and appears once the first refresh has run
+- **Weekly cost** — `≈ $186.42`, an estimate (`≈`) of what this machine's Claude Code usage in the current 7d limit window would cost at API list prices. The long-context premiums of older 1M-context betas are not modeled, and fast mode counts as 2×. Computed from the transcripts under `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` when set) (subagents included, non-Claude models skipped), deduplicated per response, refreshed at most once a minute. It counts this machine only, and appears once the first refresh has run
 
 **statusLine** — the model
 - **Model** — raw model ID (`claude-opus-5-5`, `deepseek-v4-pro`, …)
-- **Thinking effort** — `◆` + level, color-coded: `low` `medium` `high` `xhigh` `ultra` `max`
+- **Thinking effort** — `◆` + level, color-coded: `low` `medium` `high` `xhigh` `max` (other levels show in gray)
 
 ## Requirements
 
-- **Node.js** ≥ 14 (the plugin runs `node` for the weekly cost: found on `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`)
+- **Node.js** ≥ 14 (the plugin runs `node` for the weekly cost: the one `--install` ran with, then `PATH`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.volta/bin`)
 - **Claude Code** with plugin support (the desktop app's Code tab runs the same Claude Code)
 
 ## Installation
@@ -73,9 +73,9 @@ Let the script configure itself (merges into existing settings, safe to re-run):
 node ~/cclitehud/index.js --install
 ```
 
-It sets the statusLine, adds the plugin folder to `env.CLAUDE_CODE_PLUGIN_DIRS` (keeping any folders already there), removes the skill hooks an older cclitehud installed, replaces the pre-rename `desktop-plugin` folder in `CLAUDE_CODE_PLUGIN_DIRS`, and keeps the original file as `settings.json.bak` (made on the first run only; the file's permissions and any symlink are kept). It uses `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. A `settings.json` that is not plain JSON (comments, trailing commas) is left untouched: the command stops and says why.
+It sets the statusLine, adds the plugin folder to `env.CLAUDE_CODE_PLUGIN_DIRS` (keeping any folders already there), removes the skill hooks an older cclitehud installed, replaces the pre-rename `desktop-plugin` folder in `CLAUDE_CODE_PLUGIN_DIRS`, and keeps the original file as `settings.json.bak` (made on the first run only; the file's permissions and any symlink are kept). It also notes the node it ran with in `~/.cache/cclitehud/node-path`, so the plugin finds an nvm or volta node the desktop app's `PATH` misses. It uses `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set. A `settings.json` that is not plain JSON (comments, trailing commas) is left untouched: the command stops and says why.
 
-**Upgrading from 1.x** — the three-line statusline, or the `desktop-plugin/` folder: pull, then run `--install` once more. Until then the terminal shows only `model · effort` with no band above the prompt, and the desktop loses its band (the folder is now `plugin/`).
+**Upgrading** — from 2.0.0: run `--install` once more so the plugin knows which node to use (without it the plugin looks on `PATH`). From 1.x — the three-line statusline, or the `desktop-plugin/` folder: pull, then run `--install` once more. Until then the terminal shows only `model · effort` with no band above the prompt, and the desktop loses its band (the folder is now `plugin/`).
 
 Or edit `~/.claude/settings.json` by hand (merge with existing keys rather than replacing the file):
 
@@ -145,6 +145,7 @@ Colors in `C` are mid-tone hex values readable on light and dark themes.
 | statusLine config | `~/.claude/settings.json` points to this `index.js` |
 | Plugin config | `env.CLAUDE_CODE_PLUGIN_DIRS` includes the plugin folder |
 | Legacy hooks | No leftover `index.js --hook` entries from an older install |
+| Plugin node | The node `--install` noted for the plugin still starts (`--version`) |
 | Weekly cost scan | Scans the last 7 days of transcripts and prints the total |
 | Render test | Renders the statusLine |
 

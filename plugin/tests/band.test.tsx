@@ -16,6 +16,8 @@ type Setup = {
   threshold?: () => number
   weekly?: { resetsAt: string; file: string }
   runs?: string[][] // argv of each --refresh-cost run
+  nodePath?: string // what --install noted in node-path
+  missing?: string[] // node binaries whose --version fails
   noLimits?: boolean // an API-key login: no rate-limit windows
 }
 
@@ -27,6 +29,7 @@ function stub(on: On, s: Setup) {
     return <Box key="engine" />
   })
   on('process.run', (_$, e) => {
+    if (s.missing?.includes(e.argv[0] ?? '')) throw new Error('ENOENT')
     if (e.argv.includes('--refresh-cost')) s.runs?.push([...e.argv])
     const out = e.argv.includes('--show-toplevel') ? `main\n${s.top}\n${MAIN}/.git\n` : 'abc123\n'
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -45,8 +48,9 @@ function stub(on: On, s: Setup) {
     ],
   } }))
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/Users/me' : undefined }))
-  on('fs.read', () => {
-    if (!s.weekly) throw new Error('ENOENT')
+  on('fs.read', (_$, e) => {
+    if (e.path === '/Users/me/.cache/cclitehud/node-path' && s.nodePath) return { value: s.nodePath + '\n' }
+    if (!e.path.endsWith('/weekly-cost.json') || !s.weekly) throw new Error('ENOENT')
     return { value: s.weekly.file }
   })
 }
@@ -117,7 +121,7 @@ test('usage line ends with the local weekly cost for the current 7d window', asy
   const file = JSON.stringify({ windowStart, usd: 21.954, computedAt: 0 })
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], weekly: { resetsAt, file } })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Text', text: '⌂ $21.95' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '≈ $21.95' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -125,7 +129,7 @@ test('a cost cached for another window is not shown', async ($, on) => {
   const file = JSON.stringify({ windowStart: 1, usd: 99, computedAt: 0 })
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], weekly: { resetsAt: '2026-10-29T06:00:00.000Z', file } })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Text', text: /⌂/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /≈/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -156,6 +160,32 @@ test('a measurement with a stale cache runs index.js --refresh-cost for the 7d w
   expect(argv.slice(2)).toEqual(['--refresh-cost', '1792648860'])
 })
 
+test('the refresh runs the node --install noted', async ($, on) => {
+  const runs: string[][] = []
+  const nodePath = '/Users/me/.nvm/versions/node/v22.0.0/bin/node'
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], runs, nodePath })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  await $.session.measure({
+    context: { tokens: 20_000, window: 200_000, percent: 10 },
+    rateLimits: [{ kind: 'seven_day', percentUsed: 10, resetsAt: '2026-10-29T06:00:30.400Z' }],
+    changed: ['rateLimits'],
+  } as never)
+  expect(runs[0]?.[0]).toBe(nodePath)
+})
+
+test('a noted node that no longer starts falls back to PATH', async ($, on) => {
+  const runs: string[][] = []
+  const nodePath = '/Users/me/.nvm/versions/node/v20.0.0/bin/node'
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], runs, nodePath, missing: [nodePath] })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  await $.session.measure({
+    context: { tokens: 20_000, window: 200_000, percent: 10 },
+    rateLimits: [{ kind: 'seven_day', percentUsed: 10, resetsAt: '2026-10-29T06:00:30.400Z' }],
+    changed: ['rateLimits'],
+  } as never)
+  expect(runs[0]?.[0]).toBe('node')
+})
+
 test('a survey takes the band', async ($, on) => {
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND, props: { ...BAND.props, hasSurvey: true } })
@@ -180,7 +210,7 @@ test('an API-key login shows the context bar without limits or cost', async ($, 
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Text', text: 'ctx 200K ' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '5h ' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /⌂/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /≈/ })).toBeUndefined()
   await ui.unmount()
 })
 
