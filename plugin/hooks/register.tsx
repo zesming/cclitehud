@@ -17,7 +17,6 @@ const CONFIG = {
   limitBarWidth: 10,
   limitWarnPct: 70,
   limitCritPct: 90,
-  maxDirDepth: 2,
 }
 
 // Mid-tone hex colors, readable on both light and dark themes.
@@ -177,12 +176,11 @@ async function refreshWeeklyCost($: EngineInterface, windowStart: number) {
   return false
 }
 
-function shortPath(full: string, home: string | null) {
-  let p = full
-  if (home && (p === home || p.startsWith(home + '/'))) p = '~' + p.slice(home.length)
-  const segs = p.split('/').filter(Boolean)
-  if (segs.length <= CONFIG.maxDirDepth) return p || '/'
-  return segs.slice(-CONFIG.maxDirDepth).join('/')
+// The full path, with the home folder as ~
+function displayPath(full: string, home: string | null) {
+  const p = full.replace(/\/+$/, '') || '/'
+  if (home && (p === home || p.startsWith(home + '/'))) return '~' + p.slice(home.length)
+  return p
 }
 
 function homeOf(cwd: string) {
@@ -337,7 +335,7 @@ export const register: Register = on => {
     const line1 = mainRoot && worktree
       ? [
           <Text key="dir" bold color={C.dir}>
-            {shortPath(mainRoot, homeOf(mainRoot))}
+            {displayPath(mainRoot, homeOf(mainRoot))}
           </Text>,
           dot('dw'),
           <Text key="wt" bold color={C.worktree}>
@@ -346,7 +344,7 @@ export const register: Register = on => {
         ]
       : [
           <Text key="dir" bold color={C.dir}>
-            {shortPath(cwd, homeOf(cwd))}
+            {displayPath(cwd, homeOf(cwd))}
           </Text>,
         ]
     if (branch) {

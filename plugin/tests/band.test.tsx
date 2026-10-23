@@ -18,6 +18,7 @@ type Setup = {
   runs?: string[][] // argv of each --refresh-cost run
   nodePath?: string // what --install noted in node-path
   missing?: string[] // node binaries whose --version fails
+  noRepo?: boolean // cwd is outside any git repository
   noLimits?: boolean // an API-key login: no rate-limit windows
 }
 
@@ -31,6 +32,7 @@ function stub(on: On, s: Setup) {
   on('process.run', (_$, e) => {
     if (s.missing?.includes(e.argv[0] ?? '')) throw new Error('ENOENT')
     if (e.argv.includes('--refresh-cost')) s.runs?.push([...e.argv])
+    if (s.noRepo && e.argv[0] === 'git') return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
     const out = e.argv.includes('--show-toplevel') ? `main\n${s.top}\n${MAIN}/.git\n` : 'abc123\n'
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -59,15 +61,30 @@ test('worktree shows the main project first, then the worktree with its icon', a
   stub(on, { cwd: WORKTREE, top: WORKTREE, tokens: 20_000, limits: [10, 10] })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-  expect(texts.indexOf('Projects/app')).toBeGreaterThan(-1)
-  expect(texts.indexOf('⧉ fix-login')).toBeGreaterThan(texts.indexOf('Projects/app'))
+  expect(texts.indexOf('~/Projects/app')).toBeGreaterThan(-1)
+  expect(texts.indexOf('⧉ fix-login')).toBeGreaterThan(texts.indexOf('~/Projects/app'))
   await ui.unmount()
 })
+
+const DIRS: [cwd: string, shown: string, inRepo: boolean][] = [
+  ['/Users/me/Projects', '~/Projects', false],
+  [MAIN + '/packages/web', '~/Projects/app/packages/web', true],
+  ['/Users/me', '~', false],
+  ['/opt/work/app', '/opt/work/app', false],
+]
+for (const [cwd, shown, inRepo] of DIRS) {
+  test(`the directory shows in full: ${cwd} → ${shown}`, async ($, on) => {
+    stub(on, { cwd, top: MAIN, tokens: 20_000, limits: [10, 10], noRepo: !inRepo })
+    const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
+    expect(await ui.find({ type: 'Text', text: shown })).toBeDefined()
+    await ui.unmount()
+  })
+}
 
 test('plain checkout shows the cwd and no worktree', async ($, on) => {
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Text', text: 'Projects/app' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '~/Projects/app' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /⧉/ })).toBeUndefined()
   await ui.unmount()
 })
@@ -93,7 +110,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   test(`${surface} draws the band`, async ($, on) => {
     stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
     const ui = await $.ui.mount({ plugin: 'cclitehud', surface, ...BAND })
-    expect(await ui.find({ type: 'Text', text: 'Projects/app' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '~/Projects/app' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'ctx 200K ' })).toBeDefined()
     await ui.unmount()
   })
@@ -189,7 +206,7 @@ test('a noted node that no longer starts falls back to PATH', async ($, on) => {
 test('a survey takes the band', async ($, on) => {
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND, props: { ...BAND.props, hasSurvey: true } })
-  expect(await ui.find({ type: 'Text', text: 'Projects/app' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '~/Projects/app' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -197,7 +214,7 @@ test('row 1 is bold on every surface', async ($, on) => {
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'cclitehud', surface, ...BAND })
-    expect((await ui.find({ type: 'Text', text: 'Projects/app' }))?.props.bold).toBe(true)
+    expect((await ui.find({ type: 'Text', text: '~/Projects/app' }))?.props.bold).toBe(true)
     expect((await ui.find({ type: 'Text', text: '⎇ main' }))?.props.bold).toBe(true)
     await ui.unmount()
   }

@@ -5,7 +5,7 @@ A minimal HUD for [Claude Code](https://claude.ai/code), in the terminal and the
 Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with cache-hit visualization, an auto-compact mark, subscription usage limits and the week's API-equivalent cost.
 
 ```
-Projects/cclitehud · ⎇ main · ✦ brainstorming                                          ← plugin (above the prompt)
+~/Projects/cclitehud · ⎇ main · ✦ brainstorming                                        ← plugin (above the prompt)
 ctx 1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ≈ $186.42
 > _                                                                                      ← prompt
 claude-opus-5-5 · ◆ medium                                                               ← statusLine (terminal only)
@@ -23,7 +23,7 @@ The plugin reads the session through the plugin API (plus `git` for the branch a
 ## What it shows
 
 **Plugin, row 1** — where you are, in bold (in the terminal the band keeps a blank row above it, matching the one Claude Code leaves below it)
-- **Directory** — last 2 path segments, home-relative (`Projects/cclitehud`)
+- **Directory** — the full path, with your home folder as `~` (`~/Projects/cclitehud`)
 - **Worktree** — inside a git worktree the main project's path comes first, then `⧉` and the worktree's name
 - **Git branch** — `⎇`, hidden outside repos
 - **Recent skill** — last skill or slash command used, with `✦`
@@ -113,7 +113,6 @@ const CONFIG = {
   limitBarWidth: 10,  // 5h / 7d bar cells
   limitWarnPct: 70,   // bar + % turn yellow at this level
   limitCritPct: 90,   // bar + % turn red at this level
-  maxDirDepth: 2,     // directory path segments to show
 }
 ```
 
