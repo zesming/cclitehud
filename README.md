@@ -6,7 +6,7 @@ Inspired by [ccstatusline](https://github.com/sirmalloc/ccstatusline), with cach
 
 ```
 ~/Projects/cclitehud · ⎇ main · ✦ brainstorming                                        ← plugin (above the prompt)
-ctx 1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ≈ $186.42
+ctx 230K/1M ━━──────•─ 23% · ↖ cached 60% · 5h ━━──────── 23% ↻2h14m · 7d ━━━━━━━━── 78% ↻3d5h · ≈ $186.42
 > _                                                                                      ← prompt
 claude-opus-5-5 · ◆ medium                                                               ← statusLine (terminal only)
 ```
@@ -26,15 +26,15 @@ The plugin reads the session through the plugin API (plus `git` for the branch a
 - **Directory** — the full path, with your home folder as `~` (`~/Projects/cclitehud`)
 - **Worktree** — inside a git worktree the main project's path comes first, then `⧉` and the worktree's name
 - **Git branch** — `⎇`, hidden outside repos
-- **Recent skill** — last skill or slash command used, with `✦`
+- **Recent skill** — last skill or slash command used, with `✦`. A typed `/name` arrives through the prompt event; when the model drives the Skill tool itself that is caught on the tool event. This matters on a managed machine, where the built-in security plugin can pass person-installed plugins over on the `skill.prompt` event so it never reaches them — the tool event is not intercepted
 
 **Plugin, row 2** — how full things are
-- **Context bar** — `ctx` + window size, then a 10-cell thin-line bar: bright `━` cached tokens, dim `━` uncached, `─` remaining
+- **Context bar** — `ctx` + tokens used over the window size (`ctx 230K/1M`), then a 10-cell thin-line bar: bright `━` cached tokens, dim `━` uncached, `─` remaining. A fresh or just-compacted session has no token reading until its first response, so it shows the window alone; when an unrecognized third-party model leaves the engine without any usable window it shows just the tokens and skips the bar rather than drawing a misleading `ctx 0`
 - **Auto-compact mark** — a gray `•` in the context bar where auto-compaction kicks in; follows `/autocompact`, hidden when auto-compact is off
 - **Cached %** — cache hit rate of the last turn (cache_read ÷ all input tokens)
 - **5h / 7d** — subscription usage-limit bars with a `↻` reset countdown (`38m`, `2h14m`, `3d5h`); absent on API-key logins
 - **Threshold colors** — a bar and its percentage turn yellow at ≥70% and red at ≥90%. The context percentage is of the full window, but its color is judged against the auto-compact point (the full window when auto-compact is off), so it warns before compaction
-- **Weekly cost** — `≈ $186.42`, an estimate (`≈`) of what this machine's Claude Code usage in the current 7d limit window would cost at API list prices. The long-context premiums of older 1M-context betas are not modeled, and fast mode counts as 2×. Computed from the transcripts under `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` when set) (subagents included, non-Claude models skipped), deduplicated per response, refreshed at most once a minute. It counts this machine only, and appears once the first refresh has run
+- **Weekly cost** — `≈ $186.42`, an estimate (`≈`) of what this machine's Claude Code usage in the current 7d limit window would cost at API list prices. The long-context premiums of older 1M-context betas are not modeled, and fast mode counts as 2×. Computed from the transcripts under `~/.claude/projects` (`$CLAUDE_CONFIG_DIR/projects` when set) (subagents included, non-Claude models skipped), deduplicated per response, refreshed at most once a minute. It counts this machine only, and appears once the first refresh has run. On a subscription it aligns to the 7d reset; a gateway or API-key login reports no rate-limit windows, so there it aligns to fixed UTC 7-day buckets and shows the estimate anyway (the 5h/7d bars are simply absent)
 
 **statusLine** — the model
 - **Model** — raw model ID (`claude-opus-5-5`, `deepseek-v4-pro`, …)

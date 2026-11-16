@@ -126,6 +126,13 @@ function windowStartOf(resetsAt: string | undefined) {
   return Math.round((t - WEEK_SECS) / 60) * 60
 }
 
+// No subscription window on a gateway / API-key login: anchor "this week" to
+// fixed 7-day UTC buckets counted from the epoch, so the cache key holds for a
+// whole week instead of sliding on every render
+function weeklyWindowStart(nowMs: number) {
+  return Math.floor(nowMs / 1000 / WEEK_SECS) * WEEK_SECS
+}
+
 async function readWeeklyCost($: EngineInterface, windowStart: number): Promise<WeeklyCost | null> {
   try {
     const home = await $.env.get('HOME')
@@ -268,12 +275,29 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The model driving the Skill tool itself (a "/name" typed by hand arrives
+  // through prompt.submit instead). On a managed machine the built-in security
+  // plugin passes person-installed plugins over on skill.prompt, so that event
+  // never reaches us there; this tool.call is not intercepted and keeps the
+  // recent-skill indicator working. Main loop only, so a subagent's internal
+  // skill use does not overwrite what the person invoked.
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined && e.tool === 'Skill' && e.skill) {
+      await update($, skill, () => e.skill).catch(() => undefined)
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('session.measure', async ($, e, next) => {
     compactCache.window = 0
     await update($, tick, n => n + 1)
     const result = await next(e)
-    const windowStart = windowStartOf(e.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
-    if (windowStart !== null && (await refreshWeeklyCost($, windowStart).catch(() => false))) {
+    // A subscription gives the seven_day reset to align to; a gateway / API-key
+    // login reports no rate limits, so fall back to the fixed UTC week bucket
+    const windowStart =
+      windowStartOf(e.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt) ??
+      weeklyWindowStart(await $.clock.now())
+    if (await refreshWeeklyCost($, windowStart).catch(() => false)) {
       await update($, tick, n => n + 1)
     }
     return result
@@ -294,8 +318,10 @@ export const register: Register = on => {
     const ctx = usage.context
     const threshold = await compactThreshold($, ctx.window)
     const now = await $.clock.now()
-    const weekStart = windowStartOf(usage.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
-    const weekly = weekStart !== null ? await readWeeklyCost($, weekStart) : null
+    const weekStart =
+      windowStartOf(usage.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt) ??
+      weeklyWindowStart(now)
+    const weekly = await readWeeklyCost($, weekStart)
 
     const { Box, Text } = $.ui.resolve(e)
     const dot = (k: string) => (
@@ -366,27 +392,45 @@ export const register: Register = on => {
 
     // ctx bar with cache split and the auto-compact mark; its color tracks
     // how close the context is to auto-compaction (or to the window when
-    // auto-compact is off)
-    const used = ctx.percent ?? 0
-    const markAt = threshold ? Math.min(CONFIG.barWidth - 1, Math.floor((threshold / ctx.window) * CONFIG.barWidth)) : null
-    const nearPct = threshold && ctx.tokens !== undefined ? (ctx.tokens / threshold) * 100 : used
+    // auto-compact is off). A third-party / unrecognized model can leave the
+    // engine without a usable window, and a fresh or just-compacted session has
+    // no token reading until its first response: degrade to what is known
+    // instead of drawing a "ctx 0" bar against a zero window.
+    const windowTokens = ctx.window
+    const hasWindow = Number.isFinite(windowTokens) && windowTokens > 0
+    const usedTokens = ctx.tokens
+    const used = hasWindow ? (ctx.percent ?? (usedTokens ? (usedTokens / windowTokens) * 100 : 0)) : 0
+    const markAt =
+      hasWindow && threshold
+        ? Math.min(CONFIG.barWidth - 1, Math.max(0, Math.floor((threshold / windowTokens) * CONFIG.barWidth)))
+        : null
+    const nearPct = hasWindow && threshold && usedTokens !== undefined ? (usedTokens / threshold) * 100 : used
     const ctxColor = pctColor(nearPct)
+    const ctxLabel = hasWindow
+      ? 'ctx ' + (usedTokens !== undefined ? formatSize(usedTokens) + '/' : '') + formatSize(windowTokens) + ' '
+      : usedTokens !== undefined
+        ? 'ctx ' + formatSize(usedTokens) + ' '
+        : ''
     // Row 2 as segments that wrap whole: a narrow terminal breaks the row
     // between segments, never inside a bar
-    const segments: { key: string; parts: RenderChildren[] }[] = [
-      {
-        key: 'ctx',
-        parts: [
-          <Text key="label" color={C.label}>
-            {'ctx ' + formatSize(ctx.window) + ' '}
-          </Text>,
-          ...renderBar('ctx', barCells(used, cached ?? 0, CONFIG.barWidth, markAt), ctxColor),
+    const segments: { key: string; parts: RenderChildren[] }[] = []
+    if (ctxLabel) {
+      const ctxParts: RenderChildren[] = [
+        <Text key="label" color={C.label}>
+          {ctxLabel}
+        </Text>,
+      ]
+      // The bar and percentage only mean something against a real window
+      if (hasWindow) {
+        ctxParts.push(...renderBar('ctx', barCells(used, cached ?? 0, CONFIG.barWidth, markAt), ctxColor))
+        ctxParts.push(
           <Text key="pct" bold color={ctxColor === C.barFilled ? undefined : ctxColor}>
             {' ' + used.toFixed(0) + '%'}
           </Text>,
-        ],
-      },
-    ]
+        )
+      }
+      segments.push({ key: 'ctx', parts: ctxParts })
+    }
     if (cached !== null && cached > 0.5) {
       segments.push({
         key: 'cached',
@@ -424,7 +468,9 @@ export const register: Register = on => {
       }
       segments.push({ key: w.kind, parts })
     }
-    if (usage.rateLimits.some(w => labels[w.kind]) && weekly) {
+    // The weekly estimate stands on its own: a gateway / API-key login has no
+    // rate-limit windows but the local transcript scan still prices its usage
+    if (weekly) {
       segments.push({
         key: 'cost',
         parts: [
