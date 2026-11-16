@@ -126,13 +126,6 @@ function windowStartOf(resetsAt: string | undefined) {
   return Math.round((t - WEEK_SECS) / 60) * 60
 }
 
-// No subscription window on a gateway / API-key login: anchor "this week" to
-// fixed 7-day UTC buckets counted from the epoch, so the cache key holds for a
-// whole week instead of sliding on every render
-function weeklyWindowStart(nowMs: number) {
-  return Math.floor(nowMs / 1000 / WEEK_SECS) * WEEK_SECS
-}
-
 async function readWeeklyCost($: EngineInterface, windowStart: number): Promise<WeeklyCost | null> {
   try {
     const home = await $.env.get('HOME')
@@ -292,12 +285,10 @@ export const register: Register = on => {
     compactCache.window = 0
     await update($, tick, n => n + 1)
     const result = await next(e)
-    // A subscription gives the seven_day reset to align to; a gateway / API-key
-    // login reports no rate limits, so fall back to the fixed UTC week bucket
-    const windowStart =
-      windowStartOf(e.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt) ??
-      weeklyWindowStart(await $.clock.now())
-    if (await refreshWeeklyCost($, windowStart).catch(() => false)) {
+    // Only a subscription reports the seven_day window; without it (a gateway /
+    // API-key login) there is nothing to price against the API list, so no scan
+    const windowStart = windowStartOf(e.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
+    if (windowStart !== null && (await refreshWeeklyCost($, windowStart).catch(() => false))) {
       await update($, tick, n => n + 1)
     }
     return result
@@ -318,10 +309,8 @@ export const register: Register = on => {
     const ctx = usage.context
     const threshold = await compactThreshold($, ctx.window)
     const now = await $.clock.now()
-    const weekStart =
-      windowStartOf(usage.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt) ??
-      weeklyWindowStart(now)
-    const weekly = await readWeeklyCost($, weekStart)
+    const weekStart = windowStartOf(usage.rateLimits.find(w => w.kind === 'seven_day')?.resetsAt)
+    const weekly = weekStart !== null ? await readWeeklyCost($, weekStart) : null
 
     const { Box, Text } = $.ui.resolve(e)
     const dot = (k: string) => (
@@ -468,9 +457,10 @@ export const register: Register = on => {
       }
       segments.push({ key: w.kind, parts })
     }
-    // The weekly estimate stands on its own: a gateway / API-key login has no
-    // rate-limit windows but the local transcript scan still prices its usage
-    if (weekly) {
+    // Subscription-only: the estimate prices Claude API list rates, which do
+    // not match a third-party gateway, so it shows only where a subscription
+    // reports rate-limit windows — same gate as the 5h/7d bars
+    if (usage.rateLimits.some(w => labels[w.kind]) && weekly) {
       segments.push({
         key: 'cost',
         parts: [
