@@ -188,7 +188,7 @@ test('a measurement with a stale cache runs index.js --refresh-cost for the 7d w
   expect(argv.slice(2)).toEqual(['--refresh-cost', '1792648860'])
 })
 
-test('a measurement without rate limits refreshes cost for the fixed UTC week bucket', async ($, on) => {
+test('a measurement without rate limits never scans for weekly cost', async ($, on) => {
   const runs: string[][] = []
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], runs, noLimits: true })
   on('session.measure', (_$, e) => ({ changed: e.changed }))
@@ -197,9 +197,8 @@ test('a measurement without rate limits refreshes cost for the fixed UTC week bu
     rateLimits: [],
     changed: ['context'],
   } as never)
-  // Mocked clock starts at 0, which sits in the epoch-aligned 7d bucket 0
-  expect(runs.length).toBe(1)
-  expect(runs[0]?.slice(2)).toEqual(['--refresh-cost', '0'])
+  // A gateway / API-key login has no subscription window: nothing to price
+  expect(runs.length).toBe(0)
 })
 
 test('the refresh runs the node --install noted', async ($, on) => {
@@ -245,16 +244,16 @@ test('row 1 is bold on every surface', async ($, on) => {
   }
 })
 
-test('a gateway / API-key login shows the context bar and the weekly cost, without limit bars', async ($, on) => {
-  // No rate limits: the render anchors the week to fixed UTC buckets, and the
-  // mocked clock starts at 0, so the cache key is windowStart 0
+test('a gateway / API-key login shows the context bar but no limit bars or weekly cost', async ($, on) => {
+  // No rate limits means no subscription: the estimate prices Claude list rates
+  // that do not match a third-party gateway, so the cost is hidden like the bars
   const file = JSON.stringify({ windowStart: 0, usd: 5, computedAt: 0 })
   stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], noLimits: true, weekly: { resetsAt: '2026-10-29T06:00:00.000Z', file } })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Text', text: 'ctx 20K/200K ' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '5h ' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '7d ' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: '≈ $5.00' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /≈/ })).toBeUndefined()
   await ui.unmount()
 })
 
