@@ -5,7 +5,7 @@ const MAIN = '/Users/me/Projects/app'
 const WORKTREE = MAIN + '/.claude/worktrees/fix-login'
 const BAND = {
   component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 type Setup = {
@@ -20,6 +20,8 @@ type Setup = {
   missing?: string[] // node binaries whose --version fails
   noRepo?: boolean // cwd is outside any git repository
   noLimits?: boolean // an API-key login: no rate-limit windows
+  window?: number // context window override (0/undefined model: an unrecognized third-party model)
+  noTokens?: boolean // a fresh or just-compacted session: no reading until its first response
 }
 
 function stub(on: On, s: Setup) {
@@ -38,18 +40,27 @@ function stub(on: On, s: Setup) {
   })
   on('session.usage', (_$, e) => ({ value: {
     startedAt: 0,
-    context: {
-      tokens: s.tokens,
-      window: 200_000,
-      percent: Math.round((s.tokens / 200_000) * 100),
-      ...(e.breakdown ? { breakdown: { isAutoCompactEnabled: true, autoCompactThreshold: s.threshold ? s.threshold() : 160_000 } as never } : {}),
-    },
+    context: (() => {
+      const window = s.window ?? 200_000
+      const context: Record<string, unknown> = { window }
+      // A fresh / compacted session has no token reading until its first response
+      if (!s.noTokens) {
+        context.tokens = s.tokens
+        if (window > 0) context.percent = Math.round((s.tokens / window) * 100)
+      }
+      if (e.breakdown) {
+        context.breakdown = { isAutoCompactEnabled: true, autoCompactThreshold: s.threshold ? s.threshold() : 160_000 } as never
+      }
+      return context
+    })() as never,
     rateLimits: s.noLimits ? [] : [
       { kind: 'five_hour', percentUsed: s.limits[0] },
       { kind: 'seven_day', percentUsed: s.limits[1], ...(s.weekly ? { resetsAt: s.weekly.resetsAt } : {}) },
     ],
   } }))
   on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/Users/me' : undefined }))
+  // Answers the tool beneath the plugins so a Skill tool.call can dispatch
+  on('tool.call', () => ({ result: 'ok' } as never))
   on('fs.read', (_$, e) => {
     if (e.path === '/Users/me/.cache/cclitehud/node-path' && s.nodePath) return { value: s.nodePath + '\n' }
     if (!e.path.endsWith('/weekly-cost.json') || !s.weekly) throw new Error('ENOENT')
@@ -111,7 +122,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
     const ui = await $.ui.mount({ plugin: 'cclitehud', surface, ...BAND })
     expect(await ui.find({ type: 'Text', text: '~/Projects/app' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'ctx 200K ' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'ctx 20K/200K ' })).toBeDefined()
     await ui.unmount()
   })
 }
@@ -123,7 +134,7 @@ test('compact mark follows a changed auto-compact threshold', async ($, on) => {
     const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
     await ui.unmount()
-    const bar = texts.slice(texts.indexOf('ctx 200K ') + 1, texts.indexOf(' 10%')).join('')
+    const bar = texts.slice(texts.indexOf('ctx 20K/200K ') + 1, texts.indexOf(' 10%')).join('')
     return bar.indexOf('•')
   }
   expect(await markCell()).toBe(8)
@@ -177,6 +188,20 @@ test('a measurement with a stale cache runs index.js --refresh-cost for the 7d w
   expect(argv.slice(2)).toEqual(['--refresh-cost', '1792648860'])
 })
 
+test('a measurement without rate limits refreshes cost for the fixed UTC week bucket', async ($, on) => {
+  const runs: string[][] = []
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], runs, noLimits: true })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  await $.session.measure({
+    context: { tokens: 20_000, window: 200_000, percent: 10 },
+    rateLimits: [],
+    changed: ['context'],
+  } as never)
+  // Mocked clock starts at 0, which sits in the epoch-aligned 7d bucket 0
+  expect(runs.length).toBe(1)
+  expect(runs[0]?.slice(2)).toEqual(['--refresh-cost', '0'])
+})
+
 test('the refresh runs the node --install noted', async ($, on) => {
   const runs: string[][] = []
   const nodePath = '/Users/me/.nvm/versions/node/v22.0.0/bin/node'
@@ -220,14 +245,54 @@ test('row 1 is bold on every surface', async ($, on) => {
   }
 })
 
-test('an API-key login shows the context bar without limits or cost', async ($, on) => {
-  const resetsAt = '2026-10-29T06:00:00.000Z'
-  const file = JSON.stringify({ windowStart: Date.parse(resetsAt) / 1000 - 7 * 86400, usd: 5, computedAt: 0 })
-  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], noLimits: true, weekly: { resetsAt, file } })
+test('a gateway / API-key login shows the context bar and the weekly cost, without limit bars', async ($, on) => {
+  // No rate limits: the render anchors the week to fixed UTC buckets, and the
+  // mocked clock starts at 0, so the cache key is windowStart 0
+  const file = JSON.stringify({ windowStart: 0, usd: 5, computedAt: 0 })
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], noLimits: true, weekly: { resetsAt: '2026-10-29T06:00:00.000Z', file } })
+  const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: 'ctx 20K/200K ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h ' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '7d ' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '≈ $5.00' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an unrecognized model with no usable window shows tokens but no zero-window bar', async ($, on) => {
+  // noLimits keeps the 5h/7d bars out, so the assertions scope to the ctx segment
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10], window: 0, noLimits: true })
+  const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
+  // Tokens still known; the misleading "ctx 0" and percentage are not drawn
+  expect(await ui.find({ type: 'Text', text: 'ctx 20K ' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /━|─/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a fresh session before its first response shows the window without a usage reading', async ($, on) => {
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 0, limits: [10, 10], noTokens: true })
   const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Text', text: 'ctx 200K ' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '5h ' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /≈/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: ' 0%' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the model driving the Skill tool becomes the recent skill', async ($, on) => {
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
+  await $.tool.call({ tool: 'Skill', skill: 'animation-vocabulary' } as never)
+  const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: '✦ animation-vocabulary' })).toBeDefined()
+  await ui.unmount()
+})
+
+test("a subagent's Skill tool call does not replace the recent skill", async ($, on) => {
+  stub(on, { cwd: MAIN, top: MAIN, tokens: 20_000, limits: [10, 10] })
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  await $.prompt.submit({ text: '/review the diff', command: { name: 'review', args: 'the diff' } } as never).catch(() => undefined)
+  await $.tool.call({ tool: 'Skill', skill: 'background-skill', agentId: 'sub-1' } as never)
+  const ui = await $.ui.mount({ plugin: 'cclitehud', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: '✦ review' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '✦ background-skill' })).toBeUndefined()
   await ui.unmount()
 })
 

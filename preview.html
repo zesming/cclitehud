@@ -39,7 +39,7 @@
 
   <div class="scroll">
     <div class="line"><span class="dir">~/Projects/cclitehud</span><span class="sep"> · </span><span class="git">⎇ main</span><span class="sep"> · </span><span class="skill">✦ brainstorming</span><span class="tag">← plugin, row 1</span></div>
-    <div class="line"><span class="label">ctx 1M </span><span class="fill">━</span><span class="unc">━</span><span class="track">──────</span><span class="mark">•</span><span class="track">─</span><span class="pct"> 23%</span><span class="sep"> · </span><span class="fill">↖ cached 60%</span><span class="sep"> · </span><span class="label">5h </span><span class="fill">━━</span><span class="track">────────</span><span class="pct"> 23%</span><span class="reset"> ↻2h14m</span><span class="sep"> · </span><span class="label">7d </span><span class="warn">━━━━━━━━</span><span class="track">──</span><span class="pct warn"> 78%</span><span class="reset"> ↻3d5h</span><span class="sep"> · </span><span class="cost">≈ $186.42</span><span class="tag">← plugin, row 2</span></div>
+    <div class="line"><span class="label">ctx 230K/1M </span><span class="fill">━</span><span class="unc">━</span><span class="track">──────</span><span class="mark">•</span><span class="track">─</span><span class="pct"> 23%</span><span class="sep"> · </span><span class="fill">↖ cached 60%</span><span class="sep"> · </span><span class="label">5h </span><span class="fill">━━</span><span class="track">────────</span><span class="pct"> 23%</span><span class="reset"> ↻2h14m</span><span class="sep"> · </span><span class="label">7d </span><span class="warn">━━━━━━━━</span><span class="track">──</span><span class="pct warn"> 78%</span><span class="reset"> ↻3d5h</span><span class="sep"> · </span><span class="cost">≈ $186.42</span><span class="tag">← plugin, row 2</span></div>
     <div class="prompt">&gt; _</div>
     <div class="line"><span class="model">claude-opus-5-5</span><span class="sep"> · </span><span class="eff-medium">◆ medium</span><span class="tag">← statusLine (terminal only)</span></div>
   </div>
@@ -58,15 +58,19 @@
   <div class="scroll">
     <div class="variant">
       <div class="variant-label">Context nearing auto-compact (yellow), 5h past 90% (red)</div>
-      <div class="line"><span class="label">ctx 200K </span><span class="warn">━━━━</span><span class="warn-unc">━━━</span><span class="track">─</span><span class="mark">•</span><span class="track">─</span><span class="pct warn"> 66%</span><span class="sep"> · </span><span class="fill">↖ cached 56%</span><span class="sep"> · </span><span class="label">5h </span><span class="crit">━━━━━━━━━</span><span class="track">─</span><span class="pct crit"> 94%</span><span class="reset"> ↻38m</span><span class="sep"> · </span><span class="label">7d </span><span class="fill">━━━━</span><span class="track">──────</span><span class="pct"> 41%</span><span class="reset"> ↻20h</span><span class="sep"> · </span><span class="cost">≈ $412.80</span></div>
+      <div class="line"><span class="label">ctx 132K/200K </span><span class="warn">━━━━</span><span class="warn-unc">━━━</span><span class="track">─</span><span class="mark">•</span><span class="track">─</span><span class="pct warn"> 66%</span><span class="sep"> · </span><span class="fill">↖ cached 56%</span><span class="sep"> · </span><span class="label">5h </span><span class="crit">━━━━━━━━━</span><span class="track">─</span><span class="pct crit"> 94%</span><span class="reset"> ↻38m</span><span class="sep"> · </span><span class="label">7d </span><span class="fill">━━━━</span><span class="track">──────</span><span class="pct"> 41%</span><span class="reset"> ↻20h</span><span class="sep"> · </span><span class="cost">≈ $412.80</span></div>
     </div>
     <div class="variant">
       <div class="variant-label">Inside a git worktree (row 1)</div>
       <div class="line"><span class="dir">~/Projects/cclitehud</span><span class="sep"> · </span><span class="wt">⧉ fix-login</span><span class="sep"> · </span><span class="git">⎇ fix-login</span></div>
     </div>
     <div class="variant">
-      <div class="variant-label">API-key login — no usage limits, no weekly cost; auto-compact off — no mark</div>
-      <div class="line"><span class="label">ctx 1M </span><span class="fill">━</span><span class="track">─────────</span><span class="pct"> 12%</span><span class="sep"> · </span><span class="fill">↖ cached 90%</span></div>
+      <div class="variant-label">Gateway / API-key login — no usage-limit bars, but context and the weekly cost still show</div>
+      <div class="line"><span class="label">ctx 120K/1M </span><span class="fill">━</span><span class="track">─────────</span><span class="pct"> 12%</span><span class="sep"> · </span><span class="fill">↖ cached 90%</span><span class="sep"> · </span><span class="cost">≈ $94.85</span></div>
+    </div>
+    <div class="variant">
+      <div class="variant-label">Unrecognized model with no usable window yet — tokens only, no bar or percentage</div>
+      <div class="line"><span class="label">ctx 18K </span><span class="sep"> · </span><span class="cost">≈ $94.85</span></div>
     </div>
   </div>
 
